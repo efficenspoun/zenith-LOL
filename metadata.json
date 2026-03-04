@@ -1,0 +1,8 @@
+{
+  "name": "Zenith Anime Player",
+  "description": "A high-performance anime streaming interface with Jikan integration, AniList synchronization, and a flexible source plugin system.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
