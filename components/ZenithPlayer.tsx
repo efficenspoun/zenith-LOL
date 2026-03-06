@@ -73,14 +73,55 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
       const targetUrl = `${baseUrl}?${params.toString()}`;
 
       // Multi-proxy fallback strategy
-      const proxies = [
-        { name: 'Direct', url: (u: string) => u },
-        { name: 'Proxy A (AllOrigins Raw)', url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-        { name: 'Proxy B (CorsProxy.io)', url: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-        { name: 'Proxy C (Codetabs)', url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
-        { name: 'Proxy D (AllOrigins JSON)', url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, isJsonWrap: true },
-        { name: 'Proxy E (CORS Workers)', url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}` }
-      ];
+      const proxies = [{
+                    name: 'Direct',
+                    url: (u: string) => u
+                },
+                {
+                    name: 'Proxy A (AllOrigins Raw)',
+                    url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: 'Proxy B (CorsProxy.io)',
+                    url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: 'Proxy C (Codetabs)',
+                    url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+                },
+                {
+                    name: 'Proxy D (AllOrigins JSON)',
+                    url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+                    isJsonWrap: true
+                },
+                {
+                    name: 'Proxy E (CORS Workers)',
+                    url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`
+                }, {
+                    name: "Proxy F (Corsfix)",
+                    url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`
+                },
+              	{
+                    name: "Proxy G (Corslol)",
+                    url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`
+                },
+              	{
+                    name: "Proxy H (Corsx2u)",
+                    url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: "Proxy I (thebugging)",
+                    url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`
+                },
+              	{
+                    name: "Proxy J (hackeryou)",
+                    url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: "Proxy K (proxyuwu)",
+                    url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`
+                },
+            ];
 
       let lastError: any = null;
       let success = false;
