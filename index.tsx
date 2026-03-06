@@ -21,7 +21,7 @@ const mountApp = () => {
       </React.StrictMode>
     );
   } catch (error: any) {
-    console.error("Failed to render React app:", error?.message || error);
+    console.error("Failed to render React app:", typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error));
     rootElement.innerHTML = `
       <div style="padding: 2rem; color: white; background: #0f172a; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-family: sans-serif;">
         <h1 style="color: #ef4444; font-size: 1.5rem; margin-bottom: 1rem;">Zenith Engine Initialization Error</h1>
@@ -32,6 +32,20 @@ const mountApp = () => {
       </div>
     `;
   }
+};
+
+// Global error handlers to prevent circular structure errors during logging
+window.onerror = (message, source, lineno, colno, error) => {
+  const safeError = typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error || message);
+  console.error("Global Error Caught:", safeError);
+  return true; // Prevent default browser logging
+};
+
+window.onunhandledrejection = (event) => {
+  const error = event.reason;
+  const safeError = typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error);
+  console.error("Unhandled Promise Rejection:", safeError);
+  event.preventDefault();
 };
 
 // Ensure DOM is fully ready

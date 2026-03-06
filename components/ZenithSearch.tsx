@@ -51,14 +51,55 @@ const ZenithSearch: React.FC = () => {
     const targetUrl = `${baseUrl}?${params.toString()}`;
 
     // Multi-proxy fallback strategy
-    const proxies = [
-      { name: 'Direct', url: (u: string) => u },
-      { name: 'Proxy A (AllOrigins Raw)', url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-      { name: 'Proxy B (CorsProxy.io)', url: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-      { name: 'Proxy C (Codetabs)', url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
-      { name: 'Proxy D (AllOrigins JSON)', url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, isJsonWrap: true },
-      { name: 'Proxy E (CORS Workers)', url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}` }
-    ];
+    const proxies = [{
+                    name: 'Direct',
+                    url: (u: string) => u
+                },
+                {
+                    name: 'Proxy A (AllOrigins Raw)',
+                    url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: 'Proxy B (CorsProxy.io)',
+                    url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: 'Proxy C (Codetabs)',
+                    url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: 'Proxy D (AllOrigins JSON)',
+                    url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+                    isJsonWrap: true
+                },
+                {
+                    name: 'Proxy E (CORS Workers)',
+                    url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`
+                }, {
+                    name: "Proxy F (Corsfix)",
+                    url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`
+                },
+              	{
+                    name: "Proxy G (Corslol)",
+                    url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`
+                },
+              	{
+                    name: "Proxy H (Corsx2u)",
+                    url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: "Proxy I (thebugging)",
+                    url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`
+                },
+              	{
+                    name: "Proxy J (hackeryou)",
+                    url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`
+                },
+                {
+                    name: "Proxy K (proxyuwu)",
+                    url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`
+                },
+            ];
 
     let lastError: any = null;
     let success = false;
@@ -98,26 +139,49 @@ const ZenithSearch: React.FC = () => {
           }
         }
 
-        if (data.status === 'success' && data.sources) {
-          setResults(data.sources);
-          success = true;
-          console.log(`[Zenith Search] Extraction successful via ${proxy.name}`);
-          break;
-        } else if (data.status === 'success') {
-          setError('No streaming sources found for this selection.');
-          success = true;
-          break;
-        } else {
-          throw new Error(data.status || 'Unknown matrix error');
+        if (data.status === 'success' || (data as any).status === 'ok') {
+          const rawSources = data.sources || (data as any).data?.sources || (data as any).result?.sources || (data as any).data;
+          
+          if (rawSources && Array.isArray(rawSources)) {
+            const normalized = rawSources.map((s: any) => {
+              let streamUrl = s.url;
+              
+              // Handle ALLMANGA "Default" source where url is an object
+              if (typeof streamUrl === 'object' && streamUrl !== null) {
+                if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
+                  streamUrl = streamUrl.sources[0]?.url || '';
+                } else if (streamUrl.url) {
+                  streamUrl = streamUrl.url;
+                }
+              }
+              
+              return {
+                url: typeof streamUrl === 'string' ? streamUrl : '',
+                server: s.server || s.name || 'Unknown Node',
+                type: s.type || 'Unknown'
+              };
+            }).filter(s => s.url);
+
+            setResults(normalized);
+            success = true;
+            console.log(`[Zenith Search] Extraction successful via ${proxy.name}`);
+            break;
+          } else if (data.status === 'success' || (data as any).status === 'ok') {
+            setError('No streaming sources found for this selection.');
+            success = true;
+            break;
+          }
         }
+        
+        throw new Error(data.status || (data as any).message || 'Unknown matrix error');
       } catch (err: any) {
-        console.warn(`[Zenith Search] ${proxy.name} failed:`, err?.message || err);
+        console.warn(`[Zenith Search] ${proxy.name} failed:`, typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
         lastError = err;
       }
     }
 
     if (!success) {
-      console.error('Zenith Search Failed:', lastError?.message || lastError);
+      console.error('Zenith Search Failed:', typeof lastError === 'object' ? (lastError?.message || 'Unknown Error') : String(lastError));
       if (lastError?.name === 'TypeError' || lastError?.message?.includes('Failed to fetch')) {
         setError('Network connection blocked. Ensure the API port is set to Public in your environment.');
       } else {

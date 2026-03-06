@@ -90,7 +90,7 @@ export const getZenithSources = async (
       } catch (e: any) {
         lastError = e;
         const isNetworkError = e instanceof TypeError || e.message === 'Failed to fetch';
-        console.warn(`[Zenith] ${proxy.name} ${isNetworkError ? 'Network Blocked' : 'Error'}:`, e?.message || e);
+        console.warn(`[Zenith] ${proxy.name} ${isNetworkError ? 'Network Blocked' : 'Error'}:`, typeof e === 'object' ? (e?.message || 'Unknown Error') : String(e));
       }
     }
 
@@ -117,25 +117,42 @@ export const getZenithSources = async (
 
     const data: ApiResponse = await response.json();
 
-    if (data.status !== 'success' || !data.sources) {
+    const rawSources = data.sources || (data as any).data?.sources || (data as any).result?.sources || (data as any).data;
+
+    if ((data.status !== 'success' && (data as any).status !== 'ok') || !rawSources || !Array.isArray(rawSources)) {
       return [];
     }
 
-    return data.sources.map((src) => ({
-      url: src.url,
-      type: SourceType.DIRECT,
-      provider: provider,
-      pluginName: src.server,
-      label: `${src.server} (${src.type.toUpperCase()})`,
-      category: category,
-      subtitles: src.subtitles,
-      metadata: {
-        server: src.server,
-        subtitles: src.subtitles
+    return rawSources.map((src: any) => {
+      let streamUrl = src.url;
+      let isEmbed = src.type === 'iframe';
+      
+      // Handle ALLMANGA "Default" source where url is an object
+      if (typeof streamUrl === 'object' && streamUrl !== null) {
+        if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
+          streamUrl = streamUrl.sources[0]?.url || '';
+          isEmbed = false;
+        } else if (streamUrl.url) {
+          streamUrl = streamUrl.url;
+        }
       }
-    }));
+
+      return {
+        url: typeof streamUrl === 'string' ? streamUrl : '',
+        type: isEmbed ? SourceType.EMBED : SourceType.DIRECT,
+        provider: provider,
+        pluginName: src.server || src.name || 'Unknown',
+        label: `${src.server || src.name || 'Unknown'} (${(src.type || 'HLS').toUpperCase()})`,
+        category: category,
+        subtitles: src.subtitles || [],
+        metadata: {
+          server: src.server || src.name,
+          subtitles: src.subtitles || []
+        }
+      };
+    }).filter(s => s.url);
   } catch (error: any) {
-    console.error('Zenith Service Error:', error?.message || error);
+    console.error('Zenith Service Error:', typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error));
     return [];
   }
 };

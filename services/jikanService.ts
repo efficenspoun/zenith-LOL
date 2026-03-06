@@ -17,9 +17,9 @@ export const getAnimeData = async (malId: number): Promise<Anime> => {
         return fetchWithRetry(url, retries - 1);
       }
       return response;
-    } catch (e) {
+    } catch (e: any) {
       if (retries > 0) {
-        console.warn('Jikan fetch failed, trying proxy...', e?.message || e);
+        console.warn('Jikan fetch failed, trying proxy...', typeof e === 'object' ? (e?.message || 'Unknown Error') : String(e));
         const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
         return fetch(proxyUrl);
       }

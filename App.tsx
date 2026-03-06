@@ -75,7 +75,7 @@ const App: React.FC = () => {
       const results = await searchAnime(searchQuery);
       setSearchResults(results);
     } catch (err: any) {
-      console.error(err?.message || err);
+      console.error(typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
     } finally {
       setIsSearching(false);
     }
@@ -89,7 +89,7 @@ const App: React.FC = () => {
       setBatchPage(1);
       return resp.data;
     } catch (err: any) {
-      console.error("Failed to fetch real episodes, falling back to mock:", err?.message || err);
+      console.error("Failed to fetch real episodes, falling back to mock:", typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
       const mockCount = anime.episodes || 24;
       const mocks: Episode[] = Array.from({ length: mockCount }, (_, i) => ({
         mal_id: i + 1,
@@ -142,7 +142,7 @@ const App: React.FC = () => {
       
       setAvailableSources(resolved);
     } catch (err: any) {
-      console.error("Source resolution failed:", err?.message || err);
+      console.error("Source resolution failed:", typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
       setResolutionError(err.message || "An unknown error occurred during synchronization.");
     } finally {
       setIsResolvingSource(false);
@@ -213,7 +213,7 @@ const App: React.FC = () => {
           }
         }
       } catch (err: any) {
-        console.error("Deep link sync failed:", err?.message || err);
+        console.error("Deep link sync failed:", typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
       } finally {
         setIsSearching(false);
         setIsInitialLoading(false);

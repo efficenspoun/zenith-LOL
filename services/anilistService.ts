@@ -71,5 +71,9 @@ export const fetchViewer = async (token: string) => {
   });
 
   const data = await response.json();
+  if (!data?.data?.Viewer) {
+    console.warn("AniList Viewer data not found in response");
+    return null;
+  }
   return data.data.Viewer;
 };

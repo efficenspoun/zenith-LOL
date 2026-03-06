@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MediaPlayer, MediaProvider, Poster, type MediaPlayerInstance } from '@vidstack/react';
+import { MediaPlayer, MediaProvider, Poster, Track, type MediaPlayerInstance } from '@vidstack/react';
 import { defaultLayoutIcons, DefaultVideoLayout } from '@vidstack/react/player/layouts/default';
 import { Play, Server, Headphones, Globe, Loader2, AlertCircle, Activity, RefreshCw, Layers, Zap } from 'lucide-react';
 
@@ -25,6 +25,8 @@ interface ZenithSource {
   url: string;
   server: string;
   type: string;
+  isEmbed?: boolean;
+  subtitles?: { url: string; label: string }[];
 }
 
 interface ZenithApiResponse {
@@ -37,8 +39,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
   const [source, setSource] = useState<'kuudere' | 'allmanga'>('kuudere');
   const [audioType, setAudioType] = useState<'sub' | 'dub'>('sub');
   const [availableServers, setAvailableServers] = useState<ZenithSource[]>([]);
-  const [activeStreamUrl, setActiveStreamUrl] = useState<string | null>(null);
-  const [activeServerName, setActiveServerName] = useState<string>('');
+  const [activeSource, setActiveSource] = useState<ZenithSource | null>(null);
   
   // UI State
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -160,34 +161,55 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
             }
           }
 
-          if (data.status === 'success' && data.sources && Array.isArray(data.sources) && data.sources.length > 0) {
-            setAvailableServers(data.sources);
+          if (data.status === 'success' || (data as any).status === 'ok') {
+            const rawSources = data.sources || (data as any).data?.sources || (data as any).result?.sources || (data as any).data;
             
-            // Auto-select the first server
-            const firstSource = data.sources[0];
-            if (firstSource.url) {
-              // If we are changing the entire source/episode, we might want to reset savedTime
-              // but the prompt says "switch between servers seamlessly", which usually implies
-              // switching servers for the same episode. 
-              // However, if the episode or query changes, we should probably reset the saved time.
-              // For now, we'll just set the stream.
-              setActiveStreamUrl(firstSource.url);
-              setActiveServerName(firstSource.server || 'Unknown Node');
+            if (rawSources && Array.isArray(rawSources) && rawSources.length > 0) {
+              const normalized: ZenithSource[] = rawSources.map((s: any) => {
+                let streamUrl = s.url;
+                let isEmbed = s.type === 'iframe';
+                
+                // Handle ALLMANGA "Default" source where url is an object
+                if (typeof streamUrl === 'object' && streamUrl !== null) {
+                  if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
+                    // It has direct mp4 sources, so it's NOT an embed even if type says iframe
+                    streamUrl = streamUrl.sources[0]?.url || '';
+                    isEmbed = false;
+                  } else if (streamUrl.url) {
+                    streamUrl = streamUrl.url;
+                  }
+                }
+                
+                return {
+                  url: typeof streamUrl === 'string' ? streamUrl : '',
+                  server: s.server || s.name || 'Unknown Node',
+                  type: s.type || 'Unknown',
+                  isEmbed: isEmbed,
+                  subtitles: s.subtitles || []
+                };
+              }).filter(s => s.url);
+
+              setAvailableServers(normalized);
+              
+              if (normalized.length > 0) {
+                const firstSource = normalized[0];
+                setActiveSource(firstSource);
+                success = true;
+                console.log(`[Zenith] Synchronization successful via ${proxy.name}`);
+                break; 
+              } else {
+                throw new Error('Empty signal from source.');
+              }
+            } else if (data.status === 'success' || (data as any).status === 'ok') {
+              setError(`No ${audioType} streams found for ${query} (EP ${episode}) on ${source}.`);
               success = true;
-              console.log(`[Zenith] Synchronization successful via ${proxy.name}`);
-              break; 
-            } else {
-              throw new Error('Empty signal from source.');
+              break;
             }
-          } else if (data.status === 'success') {
-            setError(`No ${audioType} streams found for ${query} (EP ${episode}) on ${source}.`);
-            success = true;
-            break;
-          } else {
-            throw new Error(data.status || 'Unknown matrix error');
           }
+          
+          throw new Error(data.status || (data as any).message || 'Unknown matrix error');
         } catch (err: any) {
-          console.warn(`[Zenith] ${proxy.name} failed:`, err?.message || err);
+          console.warn(`[Zenith] ${proxy.name} failed:`, typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
           lastError = err;
         }
       }
@@ -210,13 +232,12 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
    * 3. Timestamp Logic: handleServerSwitch and onCanPlay
    */
   const handleServerSwitch = (server: ZenithSource) => {
-    if (playerRef.current) {
+    if (playerRef.current && !activeSource?.isEmbed) {
       // Save current timestamp before switching
       savedTimeRef.current = playerRef.current.currentTime;
       console.log(`[Zenith] Saving timestamp: ${savedTimeRef.current}s`);
     }
-    setActiveStreamUrl(server.url);
-    setActiveServerName(server.server);
+    setActiveSource(server);
   };
 
   const onCanPlay = () => {
@@ -231,9 +252,39 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
 
   return (
     <div className="w-full flex flex-col gap-6 animate-in fade-in duration-500">
+      <style>{`
+        .vds-poster {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          z-index: 10;
+          transition: opacity 0.4s ease;
+        }
+        .vds-media-player[data-can-play] .vds-poster {
+          opacity: 0;
+          pointer-events: none;
+        }
+        .vds-media-player[data-playing] .player-backdrop {
+          opacity: 0;
+        }
+        /* Ensure the player controls are above the backdrop */
+        .vds-video-layout {
+          z-index: 20;
+        }
+      `}</style>
       {/* 4. Vidstack Player Section */}
       <div className="relative aspect-video bg-black rounded-[2.5rem] overflow-hidden border border-white/5 shadow-2xl group ring-1 ring-white/5">
         
+        {/* Background Backdrop for Immersive Feel */}
+        {poster && (
+          <div 
+            className="player-backdrop absolute inset-0 z-0 opacity-30 blur-[100px] scale-125 pointer-events-none transition-opacity duration-1000"
+            style={{ backgroundImage: `url(${poster})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+          />
+        )}
+
         {/* Loading State UI */}
         {isLoading && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-md space-y-6">
@@ -268,34 +319,62 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
           </div>
         )}
 
-        {/* Vidstack MediaPlayer */}
-        {activeStreamUrl && !isLoading && (
-          <MediaPlayer
-            ref={playerRef}
-            title={`${query} - Episode ${episode}`}
-            src={activeStreamUrl}
-            onEnded={onComplete}
-            onCanPlay={onCanPlay}
-            className="w-full h-full"
-            playsInline
-          >
-            <MediaProvider>
-              <Poster
-                className="absolute inset-0 block h-full w-full rounded-md opacity-0 transition-opacity data-[visible]:opacity-100 object-cover"
-                src={poster || "https://picsum.photos/seed/zenith/1280/720?blur=10"}
-                alt="Poster"
+        {/* Vidstack MediaPlayer or Iframe Embed */}
+        {activeSource && !isLoading && (
+          activeSource.isEmbed ? (
+            <div className="w-full h-full bg-black flex flex-col">
+              <iframe
+                src={activeSource.url}
+                className="w-full h-full border-0"
+                allowFullScreen
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                referrerPolicy="no-referrer"
               />
-            </MediaProvider>
-            <DefaultVideoLayout icons={defaultLayoutIcons} />
-          </MediaPlayer>
+              <div className="absolute bottom-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="bg-black/80 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-lg flex items-center gap-2">
+                  <AlertCircle size={12} className="text-amber-500" />
+                  <span className="text-[8px] font-black text-white uppercase tracking-widest">Embed Mode</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <MediaPlayer
+              ref={playerRef}
+              title={`${query} - Episode ${episode}`}
+              src={activeSource.url}
+              onEnded={onComplete}
+              onCanPlay={onCanPlay}
+              className="w-full h-full"
+              playsInline
+            >
+              <MediaProvider>
+                <Poster
+                  className="vds-poster absolute inset-0 block h-full w-full opacity-0 transition-opacity data-[visible]:opacity-100"
+                  src={poster || "https://picsum.photos/seed/zenith/1280/720?blur=10"}
+                  alt="Poster"
+                />
+                {activeSource.subtitles?.map((track, i) => (
+                  <Track
+                    key={track.url}
+                    src={track.url}
+                    label={track.label}
+                    kind="subtitles"
+                    lang="en"
+                    default={i === 0}
+                  />
+                ))}
+              </MediaProvider>
+              <DefaultVideoLayout icons={defaultLayoutIcons} />
+            </MediaPlayer>
+          )
         )}
 
         {/* Overlay Info */}
-        {!isLoading && !error && activeServerName && activeStreamUrl && (
+        {!isLoading && !error && activeSource && (
           <div className="absolute top-6 left-6 z-10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
             <div className="bg-black/60 backdrop-blur-xl border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-              <span className="text-[10px] font-black text-white uppercase tracking-widest">{activeServerName} Node</span>
+              <span className="text-[10px] font-black text-white uppercase tracking-widest">{activeSource.server} Node</span>
             </div>
           </div>
         )}
@@ -369,7 +448,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
             </div>
             <div>
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Server Matrix</p>
-              <p className="text-xs font-bold text-white uppercase">{activeServerName || 'Awaiting Selection'}</p>
+              <p className="text-xs font-bold text-white uppercase">{activeSource?.server || 'Awaiting Selection'}</p>
             </div>
           </div>
           
@@ -380,7 +459,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
                   key={`${s.server}-${idx}`}
                   onClick={() => handleServerSwitch(s)}
                   className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border ${
-                    activeStreamUrl === s.url 
+                    activeSource?.url === s.url 
                       ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-600/20' 
                       : 'bg-black/40 border-white/10 text-slate-500 hover:text-slate-300 hover:bg-white/5'
                   }`}
