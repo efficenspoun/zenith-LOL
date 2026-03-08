@@ -110,44 +110,26 @@ const App: React.FC = () => {
     setSearchQuery('');
     setView('player');
     fetchEpisodes(anime);
-    navigate(`/anime/${anime.mal_id}/${normalizeTitle(anime.title)}`);
+    const animeSlug = normalizeTitle(anime.title_english || anime.title);
+    navigate(`/anime/${anime.mal_id}/${animeSlug}`);
   };
 
   const handleSelectEpisode = useCallback(async (episode: Episode, animeContext?: Anime) => {
     const anime = animeContext || selectedAnime;
-    if (!anime || isResolvingSource) return;
+    if (!anime) return;
     
     setSelectedEpisode(episode);
     setAvailableSources([]);
     setResolutionError(null);
-    setIsResolvingSource(true);
     
     // Update URL immediately for feedback
-    const animeSlug = normalizeTitle(anime.title);
+    const animeSlug = normalizeTitle(anime.title_english || anime.title);
     const targetPath = `/anime/${anime.mal_id}/${animeSlug}/episode/${episode.number}`;
     
     if (location.pathname !== targetPath) {
       navigate(targetPath);
     }
-
-    const plugin = DEFAULT_PLUGINS.find(p => p.id === activePluginId) || DEFAULT_PLUGINS[0];
-    
-    try {
-      console.log(`Resolving sources for ${anime.title} EP ${episode.number} using ${plugin.name}...`);
-      const resolved = await resolveSource(plugin, anime.mal_id, episode.number, anime);
-      
-      if (resolved.length === 0) {
-        console.warn("No sources found for this episode.");
-      }
-      
-      setAvailableSources(resolved);
-    } catch (err: any) {
-      console.error("Source resolution failed:", typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
-      setResolutionError(err.message || "An unknown error occurred during synchronization.");
-    } finally {
-      setIsResolvingSource(false);
-    }
-  }, [activePluginId, selectedAnime, navigate, location.pathname, isResolvingSource]);
+  }, [selectedAnime, navigate, location.pathname]);
 
   const loadMoreEpisodes = () => {
     setIsAppending(true);
@@ -303,7 +285,9 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <div className="p-4">
-                  <h3 className="text-xs font-black line-clamp-1 group-hover:text-blue-400 transition-colors uppercase tracking-tight">{anime.title}</h3>
+                  <h3 className="text-xs font-black line-clamp-1 group-hover:text-blue-400 transition-colors uppercase tracking-tight">
+                    {anime.title_english || anime.title}
+                  </h3>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-[9px] font-black text-slate-500 uppercase">{anime.year || 'TBA'}</span>
                     <span className="text-[10px] text-yellow-500 font-black">★ {anime.score}</span>
@@ -330,7 +314,8 @@ const App: React.FC = () => {
               {selectedEpisode ? (
                 <div className="space-y-8">
                   <ZenithPlayer 
-                    query={selectedAnime.title} 
+                    query={selectedAnime.title_english || selectedAnime.title} 
+                    alternativeQuery={selectedAnime.title}
                     episode={selectedEpisode.number}
                     poster={selectedAnime.images.jpg.large_image_url}
                     onComplete={() => {
@@ -358,11 +343,11 @@ const App: React.FC = () => {
               ) : (
                 <div className="flex flex-col md:flex-row gap-12">
                    <div className="w-full md:w-72 flex-shrink-0">
-                     <img src={selectedAnime.images.jpg.large_image_url} alt={selectedAnime.title} className="w-full rounded-[2.5rem] shadow-3xl border border-white/5" />
+                     <img src={selectedAnime.images.jpg.large_image_url} alt={selectedAnime.title_english || selectedAnime.title} className="w-full rounded-[2.5rem] shadow-3xl border border-white/5" />
                    </div>
                    <div className="flex-1 space-y-8">
                      <div className="space-y-4">
-                        <h2 className="text-6xl font-black tracking-tighter leading-[0.85]">{selectedAnime.title}</h2>
+                        <h2 className="text-6xl font-black tracking-tighter leading-[0.85]">{selectedAnime.title_english || selectedAnime.title}</h2>
                         <div className="flex flex-wrap gap-3">
                           <span className="bg-blue-600/10 text-blue-400 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-blue-500/20">{selectedAnime.status}</span>
                           <span className="bg-white/5 text-slate-400 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-white/5">{allEpisodes.length || selectedAnime.episodes || '?'} EPISODES</span>

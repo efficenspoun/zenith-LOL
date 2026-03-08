@@ -13,6 +13,7 @@ import { ZENITH_API_BASE } from '../constants';
  */
 interface ZenithPlayerProps {
   query: string;
+  alternativeQuery?: string;
   episode: number;
   poster?: string;
   onComplete?: () => void;
@@ -26,6 +27,8 @@ interface ZenithSource {
   server: string;
   type: string;
   isEmbed?: boolean;
+  isVerified?: boolean;
+  nodeId?: string;
   subtitles?: { url: string; label: string }[];
 }
 
@@ -34,7 +37,7 @@ interface ZenithApiResponse {
   sources: ZenithSource[];
 }
 
-const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onComplete }) => {
+const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, episode, poster, onComplete }) => {
   // 1. State Management
   const [source, setSource] = useState<'kuudere' | 'allmanga'>('kuudere');
   const [audioType, setAudioType] = useState<'sub' | 'dub'>('sub');
@@ -53,76 +56,43 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
    * 2. Effect Hook: Fetch data when query, episode, source, or audioType changes
    */
   useEffect(() => {
-    const fetchStreamData = async () => {
-      if (!query) return;
+    const fetchStreamData = async (searchQuery: string, isRetry: boolean = false) => {
+      if (!searchQuery) return;
 
-      setIsLoading(true);
-      setError(null);
-      setAvailableServers([]);
+      if (!isRetry) {
+        setIsLoading(true);
+        setError(null);
+        setAvailableServers([]);
+      }
       
-      // We don't clear activeStreamUrl immediately to allow the player to keep showing the old stream
-      // while the new one loads, or we can clear it if we want a fresh state.
-      // The prompt says "auto-select the first server's URL" on success.
-      
-      const baseUrl = `${ZENITH_API_BASE}/anime`;
+      const endpoint = source === 'allmanga' ? '/allmanga' : '/anime';
+      const baseUrl = `${ZENITH_API_BASE}${endpoint}`;
       const params = new URLSearchParams({
-        query: query,
+        query: searchQuery,
         episode: episode.toString(),
-        source: source,
         type: audioType
       });
+      // Only add source param if using the generic /anime endpoint
+      if (endpoint === '/anime') {
+        params.append('source', source);
+      }
       const targetUrl = `${baseUrl}?${params.toString()}`;
 
       // Multi-proxy fallback strategy
-      const proxies = [{
-                    name: 'Direct',
-                    url: (u: string) => u
-                },
-                {
-                    name: 'Proxy A (AllOrigins Raw)',
-                    url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: 'Proxy B (CorsProxy.io)',
-                    url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: 'Proxy C (Codetabs)',
-                    url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-                },
-                {
-                    name: 'Proxy D (AllOrigins JSON)',
-                    url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
-                    isJsonWrap: true
-                },
-                {
-                    name: 'Proxy E (CORS Workers)',
-                    url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`
-                }, {
-                    name: "Proxy F (Corsfix)",
-                    url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`
-                },
-              	{
-                    name: "Proxy G (Corslol)",
-                    url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`
-                },
-              	{
-                    name: "Proxy H (Corsx2u)",
-                    url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: "Proxy I (thebugging)",
-                    url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`
-                },
-              	{
-                    name: "Proxy J (hackeryou)",
-                    url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: "Proxy K (proxyuwu)",
-                    url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`
-                },
-            ];
+      const proxies = [
+        { name: 'Direct', url: (u: string) => u, timeout: 5000 },
+        { name: 'Proxy A (AllOrigins Raw)', url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: 'Proxy B (CorsProxy.io)', url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: 'Proxy C (Codetabs)', url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: 'Proxy D (AllOrigins JSON)', url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, timeout: 12000, isJsonWrap: true },
+        { name: 'Proxy E (CORS Workers)', url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: "Proxy F (Corsfix)", url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: "Proxy G (Corslol)", url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: "Proxy H (Corsx2u)", url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: "Proxy I (thebugging)", url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: "Proxy J (hackeryou)", url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: "Proxy K (proxyuwu)", url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`, timeout: 10000 },
+      ];
 
       let lastError: any = null;
       let success = false;
@@ -164,30 +134,46 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
           if (data.status === 'success' || (data as any).status === 'ok') {
             const rawSources = data.sources || (data as any).data?.sources || (data as any).result?.sources || (data as any).data;
             
-            if (rawSources && Array.isArray(rawSources) && rawSources.length > 0) {
-              const normalized: ZenithSource[] = rawSources.map((s: any) => {
-                let streamUrl = s.url;
-                let isEmbed = s.type === 'iframe';
-                
-                // Handle ALLMANGA "Default" source where url is an object
-                if (typeof streamUrl === 'object' && streamUrl !== null) {
-                  if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
-                    // It has direct mp4 sources, so it's NOT an embed even if type says iframe
-                    streamUrl = streamUrl.sources[0]?.url || '';
-                    isEmbed = false;
-                  } else if (streamUrl.url) {
-                    streamUrl = streamUrl.url;
+              if (rawSources && Array.isArray(rawSources) && rawSources.length > 0) {
+                const seenUrls = new Set<string>();
+                const normalized: ZenithSource[] = rawSources.map((s: any) => {
+                  let streamUrl = s.url;
+                  let isEmbed = s.type === 'iframe';
+                  const serverName = (s.server || s.name || 'Unknown Node').toUpperCase();
+                  
+                  // Handle ALLMANGA "Default" source where url is an object
+                  if (typeof streamUrl === 'object' && streamUrl !== null) {
+                    if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
+                      streamUrl = streamUrl.sources[0]?.url || '';
+                      isEmbed = false;
+                    } else if (streamUrl.url) {
+                      streamUrl = streamUrl.url;
+                    }
                   }
-                }
-                
-                return {
-                  url: typeof streamUrl === 'string' ? streamUrl : '',
-                  server: s.server || s.name || 'Unknown Node',
-                  type: s.type || 'Unknown',
-                  isEmbed: isEmbed,
-                  subtitles: s.subtitles || []
-                };
-              }).filter(s => s.url);
+
+                  // Verification Logic for AllManga
+                  let isVerified = true;
+                  if (source === 'allmanga') {
+                    const subVerified = ['DEFAULT', 'YT', 'S-MP4', 'OK'];
+                    const dubVerified = ['DEFAULT', 'YT', 'S-MP4', 'OK', 'UV-MP4'];
+                    const verifiedList = audioType === 'sub' ? subVerified : dubVerified;
+                    isVerified = verifiedList.includes(serverName);
+                  }
+                  
+                  return {
+                    url: typeof streamUrl === 'string' ? streamUrl : '',
+                    server: s.server || s.name || 'Unknown Node',
+                    type: s.type || 'Unknown',
+                    isEmbed: isEmbed,
+                    isVerified: isVerified,
+                    nodeId: `ZN-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+                    subtitles: s.subtitles || []
+                  };
+                }).filter(s => {
+                  if (!s.url || seenUrls.has(s.url)) return false;
+                  seenUrls.add(s.url);
+                  return true;
+                });
 
               setAvailableServers(normalized);
               
@@ -215,6 +201,12 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
       }
 
       if (!success && !error) {
+        // If 404 and we have an alternative query, try it
+        if (lastError?.message?.includes('404') && alternativeQuery && searchQuery !== alternativeQuery && !isRetry) {
+          console.log(`[Zenith] Query "${searchQuery}" failed with 404. Retrying with alternative: "${alternativeQuery}"`);
+          return fetchStreamData(alternativeQuery, true);
+        }
+
         if (lastError?.name === 'TypeError' || lastError?.message?.includes('Failed to fetch')) {
           setError('Network connection blocked. Ensure the API port is set to Public in your environment.');
         } else {
@@ -225,8 +217,8 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
       setIsLoading(false);
     };
 
-    fetchStreamData();
-  }, [query, episode, source, audioType]);
+    fetchStreamData(query);
+  }, [query, alternativeQuery, episode, source, audioType]);
 
   /**
    * 3. Timestamp Logic: handleServerSwitch and onCanPlay
@@ -248,6 +240,58 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
       // but usually one is enough. We'll reset it to 0 after a successful seek.
       savedTimeRef.current = 0;
     }
+  };
+
+  const handlePlayerError = () => {
+    if (!activeSource) return;
+    
+    console.warn(`[Zenith] Server ${activeSource.server} failed. Attempting failover...`);
+    
+    if (availableServers.length > 1) {
+      const currentIndex = availableServers.findIndex(s => s.url === activeSource.url);
+      const nextIndex = (currentIndex + 1) % availableServers.length;
+      
+      // If we've looped back to the start, stop trying to avoid infinite loops
+      if (nextIndex === 0 && currentIndex !== -1) {
+        setError("All available servers failed to load. Please try a different extraction source or audio protocol.");
+        return;
+      }
+
+      const nextSource = availableServers[nextIndex];
+      handleServerSwitch(nextSource);
+    } else {
+      setError(`The server ${activeSource.server} failed to load and no fallback nodes are available.`);
+    }
+  };
+
+  /**
+   * 4. Server Matrix Overhaul: Mapping and UI
+   */
+  const getServerDisplay = (name: string) => {
+    const n = name.toLowerCase();
+    
+    // AllManga specific mappings
+    if (n === 'default') return { label: 'Zenith Prime', icon: <Zap size={10} />, color: 'text-blue-400', glow: 'shadow-blue-500/20' };
+    if (n === 'yt') return { label: 'Nexus MP4', icon: <Activity size={10} />, color: 'text-emerald-400', glow: 'shadow-emerald-500/20' };
+    if (n === 's-mp4') return { label: 'Shadow Stream', icon: <Layers size={10} />, color: 'text-purple-400', glow: 'shadow-purple-500/20' };
+    if (n === 'ok') return { label: 'Omega Node', icon: <Globe size={10} />, color: 'text-cyan-400', glow: 'shadow-cyan-500/20' };
+    if (n === 'uv-mp4') return { label: 'Ultra Violet', icon: <Zap size={10} />, color: 'text-violet-400', glow: 'shadow-violet-500/20' };
+    
+    // Generic mappings
+    if (n.includes('vidstreaming')) return { label: 'VidStream', icon: <Activity size={10} />, color: 'text-blue-400', glow: 'shadow-blue-500/20' };
+    if (n.includes('gogo')) return { label: 'GogoNode', icon: <Zap size={10} />, color: 'text-yellow-400', glow: 'shadow-yellow-500/20' };
+    if (n.includes('streamsb')) return { label: 'StreamSB', icon: <Layers size={10} />, color: 'text-orange-400', glow: 'shadow-orange-500/20' };
+    if (n.includes('mixdrop')) return { label: 'MixDrop', icon: <Globe size={10} />, color: 'text-pink-400', glow: 'shadow-pink-500/20' };
+    if (n.includes('mp4upload')) return { label: 'Mp4Upload', icon: <Activity size={10} />, color: 'text-indigo-400', glow: 'shadow-indigo-500/20' };
+    if (n.includes('filemoon')) return { label: 'FileMoon', icon: <Zap size={10} />, color: 'text-emerald-400', glow: 'shadow-emerald-500/20' };
+    
+    // Fallback
+    return { 
+      label: name.charAt(0).toUpperCase() + name.slice(1), 
+      icon: <Server size={10} />, 
+      color: 'text-slate-400',
+      glow: 'shadow-white/5'
+    };
   };
 
   return (
@@ -310,7 +354,15 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
               <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">{error}</p>
             </div>
             <button 
-              onClick={() => window.location.reload()}
+              onClick={() => {
+                setError(null);
+                setIsLoading(true);
+                // Trigger a re-fetch by slightly changing a state or just calling the fetch logic again
+                // For simplicity, we'll just reload the page or re-trigger the effect
+                const currentSource = source;
+                setSource(currentSource === 'kuudere' ? 'allmanga' : 'kuudere');
+                setTimeout(() => setSource(currentSource), 10);
+              }}
               className="flex items-center gap-2 px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
             >
               <RefreshCw size={14} />
@@ -341,9 +393,13 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
             <MediaPlayer
               ref={playerRef}
               title={`${query} - Episode ${episode}`}
-              src={activeSource.url}
+              src={{
+                src: activeSource.url,
+                type: activeSource.url.includes('.txt') || activeSource.url.includes('.m3u8') ? 'application/x-mpegurl' : undefined
+              }}
               onEnded={onComplete}
               onCanPlay={onCanPlay}
+              onError={handlePlayerError}
               className="w-full h-full"
               playsInline
             >
@@ -448,27 +504,56 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, episode, poster, onC
             </div>
             <div>
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Server Matrix</p>
-              <p className="text-xs font-bold text-white uppercase">{activeSource?.server || 'Awaiting Selection'}</p>
+              <p className="text-xs font-bold text-white uppercase">
+                {activeSource ? getServerDisplay(activeSource.server).label : 'Awaiting Selection'}
+              </p>
             </div>
           </div>
           
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[200px] pr-2 custom-scrollbar">
             {availableServers.length > 0 ? (
-              availableServers.map((s, idx) => (
-                <button
-                  key={`${s.server}-${idx}`}
-                  onClick={() => handleServerSwitch(s)}
-                  className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border ${
-                    activeSource?.url === s.url 
-                      ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-600/20' 
-                      : 'bg-black/40 border-white/10 text-slate-500 hover:text-slate-300 hover:bg-white/5'
-                  }`}
-                >
-                  {s.server}
-                </button>
-              ))
+              availableServers.map((s, idx) => {
+                const display = getServerDisplay(s.server);
+                const isActive = activeSource?.url === s.url;
+                return (
+                  <button
+                    key={`${s.server}-${idx}`}
+                    onClick={() => handleServerSwitch(s)}
+                    className={`relative p-3 rounded-2xl text-left transition-all border group/btn ${
+                      isActive 
+                        ? `bg-purple-600/10 border-purple-500 shadow-lg ${display.glow}` 
+                        : 'bg-black/40 border-white/5 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[8px] font-mono ${isActive ? 'text-purple-400' : 'text-slate-600'}`}>
+                          {s.nodeId}
+                        </span>
+                        <div className={isActive ? 'text-purple-400' : 'text-slate-500'}>
+                          {display.icon}
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-black uppercase tracking-tight truncate ${isActive ? 'text-white' : 'text-slate-400 group-hover/btn:text-slate-200'}`}>
+                        {display.label}
+                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className={`w-1 h-1 rounded-full ${s.isVerified ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
+                        <span className={`text-[7px] font-bold uppercase tracking-widest ${s.isVerified ? 'text-emerald-500/60' : 'text-amber-500/60'}`}>
+                          {s.isVerified ? 'Verified' : 'Unverified'}
+                        </span>
+                      </div>
+                    </div>
+                    {isActive && (
+                      <div className="absolute top-1 right-1">
+                        <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-ping"></div>
+                      </div>
+                    )}
+                  </button>
+                );
+              })
             ) : (
-              <p className="text-[9px] text-slate-600 uppercase font-bold px-2">No servers available</p>
+              <p className="text-[9px] text-slate-600 uppercase font-bold px-2 col-span-2">No servers available</p>
             )}
           </div>
         </div>

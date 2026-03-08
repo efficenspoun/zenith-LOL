@@ -9,6 +9,7 @@ interface ZenithSource {
   url: string;
   server: string;
   type: string;
+  isVerified?: boolean;
 }
 
 interface ZenithApiResponse {
@@ -41,65 +42,34 @@ const ZenithSearch: React.FC = () => {
     setError(null);
     setResults([]);
 
-    const baseUrl = `${ZENITH_API_BASE}/anime`;
+    const endpoint = source === 'allmanga' ? '/allmanga' : '/anime';
+    const baseUrl = `${ZENITH_API_BASE}${endpoint}`;
     const params = new URLSearchParams({
       query: query.trim(),
       episode: episode.toString(),
-      source: source,
       type: type
     });
+    // Only add source param if using the generic /anime endpoint
+    if (endpoint === '/anime') {
+      params.append('source', source);
+    }
     const targetUrl = `${baseUrl}?${params.toString()}`;
 
     // Multi-proxy fallback strategy
-    const proxies = [{
-                    name: 'Direct',
-                    url: (u: string) => u
-                },
-                {
-                    name: 'Proxy A (AllOrigins Raw)',
-                    url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: 'Proxy B (CorsProxy.io)',
-                    url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: 'Proxy C (Codetabs)',
-                    url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: 'Proxy D (AllOrigins JSON)',
-                    url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
-                    isJsonWrap: true
-                },
-                {
-                    name: 'Proxy E (CORS Workers)',
-                    url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`
-                }, {
-                    name: "Proxy F (Corsfix)",
-                    url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`
-                },
-              	{
-                    name: "Proxy G (Corslol)",
-                    url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`
-                },
-              	{
-                    name: "Proxy H (Corsx2u)",
-                    url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: "Proxy I (thebugging)",
-                    url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`
-                },
-              	{
-                    name: "Proxy J (hackeryou)",
-                    url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`
-                },
-                {
-                    name: "Proxy K (proxyuwu)",
-                    url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`
-                },
-            ];
+    const proxies = [
+      { name: 'Direct', url: (u: string) => u, timeout: 5000 },
+      { name: 'Proxy A (AllOrigins Raw)', url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: 'Proxy B (CorsProxy.io)', url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: 'Proxy C (Codetabs)', url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: 'Proxy D (AllOrigins JSON)', url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, timeout: 12000, isJsonWrap: true },
+      { name: 'Proxy E (CORS Workers)', url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: "Proxy F (Corsfix)", url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: "Proxy G (Corslol)", url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: "Proxy H (Corsx2u)", url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: "Proxy I (thebugging)", url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: "Proxy J (hackeryou)", url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`, timeout: 10000 },
+      { name: "Proxy K (proxyuwu)", url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`, timeout: 10000 },
+    ];
 
     let lastError: any = null;
     let success = false;
@@ -145,6 +115,7 @@ const ZenithSearch: React.FC = () => {
           if (rawSources && Array.isArray(rawSources)) {
             const normalized = rawSources.map((s: any) => {
               let streamUrl = s.url;
+              const serverName = (s.server || s.name || 'Unknown Node').toUpperCase();
               
               // Handle ALLMANGA "Default" source where url is an object
               if (typeof streamUrl === 'object' && streamUrl !== null) {
@@ -154,11 +125,21 @@ const ZenithSearch: React.FC = () => {
                   streamUrl = streamUrl.url;
                 }
               }
+
+              // Verification Logic for AllManga
+              let isVerified = true;
+              if (source === 'allmanga') {
+                const subVerified = ['DEFAULT', 'YT', 'S-MP4', 'OK'];
+                const dubVerified = ['DEFAULT', 'YT', 'S-MP4', 'OK', 'UV-MP4'];
+                const verifiedList = type === 'sub' ? subVerified : dubVerified;
+                isVerified = verifiedList.includes(serverName);
+              }
               
               return {
                 url: typeof streamUrl === 'string' ? streamUrl : '',
                 server: s.server || s.name || 'Unknown Node',
-                type: s.type || 'Unknown'
+                type: s.type || 'Unknown',
+                isVerified: isVerified
               };
             }).filter(s => s.url);
 
@@ -325,7 +306,12 @@ const ZenithSearch: React.FC = () => {
                     <Play size={16} className="text-blue-500" />
                   </div>
                   <div>
-                    <p className="text-xs font-black text-white uppercase tracking-tight">{item.server}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-black text-white uppercase tracking-tight">{item.server}</p>
+                      {!item.isVerified && (
+                        <span className="text-[7px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-1.5 py-0.5 rounded font-black uppercase tracking-widest">Unverified</span>
+                      )}
+                    </div>
                     <p className="text-[10px] font-mono text-slate-500 uppercase">{item.type}</p>
                   </div>
                 </div>
