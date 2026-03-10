@@ -9,6 +9,10 @@ const getCircularReplacer = () => {
   const seen = new WeakSet();
   return (_key: string, value: any) => {
     if (typeof value === "object" && value !== null) {
+      // Explicitly check for DOM nodes which are common sources of circularity in React
+      if (value instanceof Node) {
+        return "[DOM Node]";
+      }
       if (seen.has(value)) {
         return "[Circular]";
       }

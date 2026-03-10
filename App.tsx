@@ -272,9 +272,9 @@ const App: React.FC = () => {
 
         {searchResults.length > 0 && !selectedAnime && !isSearching && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-            {searchResults.map(anime => (
+            {searchResults.map((anime, index) => (
               <div 
-                key={anime.mal_id} 
+                key={`${anime.mal_id}-${index}`} 
                 className="group cursor-pointer bg-slate-900/40 rounded-3xl overflow-hidden border border-white/5 hover:border-blue-500/30 transition-all hover:-translate-y-2 shadow-2xl"
                 onClick={() => handleSelectAnime(anime)}
               >
@@ -358,9 +358,9 @@ const App: React.FC = () => {
                      <div className="space-y-6 pt-6 border-t border-white/5">
                        <h3 className="text-xs font-black uppercase tracking-[0.4em] text-slate-500">Episode Selection</h3>
                        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 max-h-[450px] overflow-y-auto pr-2 custom-scrollbar">
-                         {displayedEpisodes.map(ep => (
+                         {displayedEpisodes.map((ep, index) => (
                            <button
-                             key={ep.mal_id}
+                             key={`${ep.mal_id}-${index}`}
                              onClick={() => handleSelectEpisode(ep)}
                              className="bg-slate-900/40 hover:bg-blue-600/10 border border-white/5 hover:border-blue-500/30 p-4 rounded-xl text-left transition-all group"
                            >
@@ -385,9 +385,9 @@ const App: React.FC = () => {
               <div className="w-full lg:w-96 space-y-6 sticky top-28 self-start animate-in fade-in slide-in-from-right-4">
                 <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-slate-500 px-2">Sequential Queue</h3>
                 <div className="max-h-[70vh] overflow-y-auto pr-4 space-y-3 custom-scrollbar">
-                  {displayedEpisodes.map(ep => (
+                  {displayedEpisodes.map((ep, index) => (
                     <button
-                      key={ep.mal_id}
+                      key={`queue-${ep.mal_id}-${index}`}
                       onClick={() => handleSelectEpisode(ep)}
                       className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all border ${selectedEpisode?.mal_id === ep.mal_id ? 'bg-blue-600/10 border-blue-500/50 shadow-2xl' : 'bg-slate-900/30 border-transparent hover:bg-slate-900 hover:border-white/5'}`}
                     >
@@ -395,8 +395,16 @@ const App: React.FC = () => {
                         {ep.number}
                       </div>
                       <div className="text-left overflow-hidden">
-                        <div className={`text-[10px] font-black uppercase truncate mb-1 ${selectedEpisode?.mal_id === ep.mal_id ? 'text-blue-400' : 'text-slate-300'}`}>
-                          Episode {ep.number}
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className={`text-[10px] font-black uppercase truncate ${selectedEpisode?.mal_id === ep.mal_id ? 'text-blue-400' : 'text-slate-300'}`}>
+                            Episode {ep.number}
+                          </div>
+                          {selectedEpisode?.mal_id === ep.mal_id && (
+                            <div className="flex items-center gap-1 bg-blue-500/10 px-1.5 py-0.5 rounded-md border border-blue-500/20">
+                              <div className="w-1 h-1 rounded-full bg-blue-500 animate-pulse"></div>
+                              <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest">Active</span>
+                            </div>
+                          )}
                         </div>
                         <div className="text-[8px] text-slate-600 font-bold uppercase tracking-widest">S1 • HD Stream</div>
                       </div>

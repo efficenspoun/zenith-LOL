@@ -43,6 +43,12 @@ const Player: React.FC<PlayerProps> = ({ source, title, poster, onProgress, onCo
       lowLatencyMode: true,
       backBufferLength: 90,
       maxBufferLength: 60,
+      manifestLoadingMaxRetry: 6,
+      levelLoadingMaxRetry: 6,
+      fragLoadingMaxRetry: 6,
+      manifestLoadingRetryDelay: 1000,
+      levelLoadingRetryDelay: 1000,
+      fragLoadingRetryDelay: 1000,
     };
   }, []);
 

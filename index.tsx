@@ -37,6 +37,8 @@ const mountApp = () => {
 // Global error handlers to prevent circular structure errors during logging
 window.onerror = (message, source, lineno, colno, error) => {
   const safeError = typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error || message);
+  // Ignore AbortError and signal interrupted as they are expected when cancelling fetch requests
+  if (safeError.includes('AbortError') || safeError.includes('signal interrupted')) return true;
   console.error("Global Error Caught:", safeError);
   return true; // Prevent default browser logging
 };
@@ -44,6 +46,11 @@ window.onerror = (message, source, lineno, colno, error) => {
 window.onunhandledrejection = (event) => {
   const error = event.reason;
   const safeError = typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error);
+  // Ignore AbortError and signal interrupted as they are expected when cancelling fetch requests
+  if (safeError.includes('AbortError') || safeError.includes('signal interrupted')) {
+    event.preventDefault();
+    return;
+  }
   console.error("Unhandled Promise Rejection:", safeError);
   event.preventDefault();
 };

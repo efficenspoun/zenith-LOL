@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MediaPlayer, MediaProvider, Poster, Track, type MediaPlayerInstance } from '@vidstack/react';
 import { defaultLayoutIcons, DefaultVideoLayout } from '@vidstack/react/player/layouts/default';
-import { Play, Server, Headphones, Globe, Loader2, AlertCircle, Activity, RefreshCw, Layers, Zap } from 'lucide-react';
+import { Play, Server, Headphones, Globe, Loader2, AlertCircle, Activity, RefreshCw, Layers, Zap, Shield, Info, ExternalLink, ChevronRight } from 'lucide-react';
+import Hls from 'hls.js';
 
 import '@vidstack/react/player/styles/default/theme.css';
 import '@vidstack/react/player/styles/default/layouts/video.css';
@@ -37,6 +38,8 @@ interface ZenithApiResponse {
   sources: ZenithSource[];
 }
 
+type LoadingStage = 'fetching' | 'decrypting' | 'buffering' | 'ready' | 'idle';
+
 const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, episode, poster, onComplete }) => {
   // 1. State Management
   const [source, setSource] = useState<'kuudere' | 'allmanga'>('kuudere');
@@ -46,206 +49,239 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
   
   // UI State
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [loadingStage, setLoadingStage] = useState<LoadingStage>('idle');
+  const [loadProgress, setLoadProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+
+  // Clear error whenever activeSource changes as a safety net
+  useEffect(() => {
+    if (activeSource) {
+      setError(null);
+      setLoadingStage('fetching');
+      setLoadProgress(10);
+    }
+  }, [activeSource]);
 
   // Refs for Player and Timestamp Syncing
   const playerRef = useRef<MediaPlayerInstance>(null);
   const savedTimeRef = useRef<number>(0);
 
   /**
+   * HLS Configuration for Vidstack (Essential for CORS and Encrypted Keys)
+   */
+  const hlsConfig = useMemo(() => {
+    if (!Hls.isSupported()) return {};
+    
+    const proxyBase = 'https://test.cors.workers.dev/?';
+    
+    return {
+      fetchSetup: (url: string, init: RequestInit) => {
+        // Proxy HLS manifest, segments, keys and other related files
+        const hlsExtensions = ['.m3u8', '.ts', '.key', '.txt', '.urlset', '.vtt', '.srt'];
+        if (hlsExtensions.some(ext => url.includes(ext))) {
+          return new Request(proxyBase + encodeURIComponent(url), init);
+        }
+        return new Request(url, init);
+      },
+      xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+        xhr.withCredentials = false;
+      },
+      enableWorker: true,
+      lowLatencyMode: true,
+      backBufferLength: 90,
+      maxBufferLength: 60,
+      maxMaxBufferLength: 600,
+    };
+  }, [activeSource]);
+
+  /**
    * 2. Effect Hook: Fetch data when query, episode, source, or audioType changes
    */
   useEffect(() => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+
     const fetchStreamData = async (searchQuery: string, isRetry: boolean = false) => {
       if (!searchQuery) return;
 
       if (!isRetry) {
         setIsLoading(true);
+        setLoadingStage('fetching');
+        setLoadProgress(20);
         setError(null);
         setAvailableServers([]);
       }
       
-      const endpoint = source === 'allmanga' ? '/allmanga' : '/anime';
-      const baseUrl = `${ZENITH_API_BASE}${endpoint}`;
+      // Use the base /anime path with query parameters as per user requirement
+      const baseUrl = `${ZENITH_API_BASE}/anime`;
       const params = new URLSearchParams({
         query: searchQuery,
         episode: episode.toString(),
-        type: audioType
+        source: source
       });
-      // Only add source param if using the generic /anime endpoint
-      if (endpoint === '/anime') {
-        params.append('source', source);
+      // Only add type if it's explicitly provided
+      if (audioType) {
+        params.append('type', audioType);
       }
       const targetUrl = `${baseUrl}?${params.toString()}`;
 
-      // Multi-proxy fallback strategy
+      // Multi-proxy fallback strategy (Essential for CORS)
       const proxies = [
-        { name: 'Direct', url: (u: string) => u, timeout: 5000 },
-        { name: 'Proxy A (AllOrigins Raw)', url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: 'Proxy B (CorsProxy.io)', url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: 'Proxy C (Codetabs)', url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: 'Proxy D (AllOrigins JSON)', url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, timeout: 12000, isJsonWrap: true },
-        { name: 'Proxy E (CORS Workers)', url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: "Proxy F (Corsfix)", url: (u: string) => `https://proxy.corsfix.com/?${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: "Proxy G (Corslol)", url: (u: string) => `https://cors.lol/?url=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: "Proxy H (Corsx2u)", url: (u: string) => `https://cors.x2u.in/?url=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: "Proxy I (thebugging)", url: (u: string) => `https://www.thebugging.com/apis/cors-proxy?url=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: "Proxy J (hackeryou)", url: (u: string) => `https://proxy.hackeryou.com/?url=${encodeURIComponent(u)}`, timeout: 10000 },
-        { name: "Proxy K (proxyuwu)", url: (u: string) => `https://proxyuwu.ilikechez87.workers.dev/?${encodeURIComponent(u)}`, timeout: 10000 },
+        { name: 'Direct', url: (u: string) => u },
+        { name: 'Proxy A', url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+        { name: 'Proxy B', url: (u: string) => `https://test.cors.workers.dev/?${encodeURIComponent(u)}` },
       ];
 
       let lastError: any = null;
       let success = false;
 
       for (const proxy of proxies) {
+        if (signal.aborted) return;
+
         try {
-          console.log(`[Zenith] Fetching ${source} via ${proxy.name}...`);
-          const fetchUrl = proxy.url(targetUrl);
+          console.log(`[Zenith] Attempting extraction via ${proxy.name}...`);
+          const response = await fetch(proxy.url(targetUrl), { signal });
           
-          const response = await fetch(fetchUrl, {
-            method: 'GET',
-            credentials: 'omit',
-            mode: 'cors'
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Node unreachable via ${proxy.name} (Status: ${response.status})`);
-          }
+          if (!response.ok) throw new Error(`Node unreachable via ${proxy.name} (Status: ${response.status})`);
 
-          let data: ZenithApiResponse;
+          // Check content type before parsing as JSON
+          const contentType = response.headers.get('content-type');
+          let data: any;
           
-          if (proxy.isJsonWrap) {
-            const json = await response.json();
-            if (!json.contents) throw new Error(`Empty contents from ${proxy.name}`);
-            data = JSON.parse(json.contents);
+          if (contentType && contentType.includes('application/json')) {
+            data = await response.json();
           } else {
-            const contentType = response.headers.get('content-type');
-            if (contentType && !contentType.includes('application/json')) {
-              const text = await response.text();
-              if (text.trim().startsWith('<')) {
-                throw new Error(`Received HTML instead of JSON from ${proxy.name}`);
-              }
+            const text = await response.text();
+            if (text.trim().startsWith('<')) {
+              throw new Error(`Received HTML instead of JSON from ${proxy.name}`);
+            }
+            try {
               data = JSON.parse(text);
-            } else {
-              data = await response.json();
+            } catch (e) {
+              throw new Error(`Failed to parse JSON from ${proxy.name}`);
             }
           }
 
-          if (data.status === 'success' || (data as any).status === 'ok') {
-            const rawSources = data.sources || (data as any).data?.sources || (data as any).result?.sources || (data as any).data;
-            
-              if (rawSources && Array.isArray(rawSources) && rawSources.length > 0) {
-                const seenUrls = new Set<string>();
-                const normalized: ZenithSource[] = rawSources.map((s: any) => {
-                  let streamUrl = s.url;
-                  let isEmbed = s.type === 'iframe';
-                  const serverName = (s.server || s.name || 'Unknown Node').toUpperCase();
-                  
-                  // Handle ALLMANGA "Default" source where url is an object
-                  if (typeof streamUrl === 'object' && streamUrl !== null) {
-                    if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
-                      streamUrl = streamUrl.sources[0]?.url || '';
-                      isEmbed = false;
-                    } else if (streamUrl.url) {
-                      streamUrl = streamUrl.url;
-                    }
-                  }
-
-                  // Verification Logic for AllManga
-                  let isVerified = true;
-                  if (source === 'allmanga') {
-                    const subVerified = ['DEFAULT', 'YT', 'S-MP4', 'OK'];
-                    const dubVerified = ['DEFAULT', 'YT', 'S-MP4', 'OK', 'UV-MP4'];
-                    const verifiedList = audioType === 'sub' ? subVerified : dubVerified;
-                    isVerified = verifiedList.includes(serverName);
-                  }
-                  
-                  return {
-                    url: typeof streamUrl === 'string' ? streamUrl : '',
-                    server: s.server || s.name || 'Unknown Node',
-                    type: s.type || 'Unknown',
-                    isEmbed: isEmbed,
-                    isVerified: isVerified,
-                    nodeId: `ZN-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-                    subtitles: s.subtitles || []
-                  };
-                }).filter(s => {
-                  if (!s.url || seenUrls.has(s.url)) return false;
-                  seenUrls.add(s.url);
-                  return true;
-                });
-
-              setAvailableServers(normalized);
-              
-              if (normalized.length > 0) {
-                const firstSource = normalized[0];
-                setActiveSource(firstSource);
-                success = true;
-                console.log(`[Zenith] Synchronization successful via ${proxy.name}`);
-                break; 
-              } else {
-                throw new Error('Empty signal from source.');
-              }
-            } else if (data.status === 'success' || (data as any).status === 'ok') {
-              setError(`No ${audioType} streams found for ${query} (EP ${episode}) on ${source}.`);
-              success = true;
-              break;
-            }
-          }
+          const rawSources = data.sources || data.data?.sources || data.result?.sources || data.data || (Array.isArray(data) ? data : null);
           
-          throw new Error(data.status || (data as any).message || 'Unknown matrix error');
+          if (rawSources && Array.isArray(rawSources) && rawSources.length > 0) {
+            const seenUrls = new Set<string>();
+            const normalized: ZenithSource[] = rawSources.map((s: any) => {
+              let streamUrl = s.url;
+              const serverName = (s.server || s.name || 'Unknown Node').toUpperCase();
+              
+              // Handle ALLMANGA "Default" source where url is an object
+              if (typeof streamUrl === 'object' && streamUrl !== null) {
+                if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
+                  const preferred = streamUrl.sources.find((src: any) => src.quality === '1080p') || 
+                                  streamUrl.sources.find((src: any) => src.quality === '720p') || 
+                                  streamUrl.sources[0];
+                  streamUrl = preferred?.url || '';
+                } else if (streamUrl.url) {
+                  streamUrl = streamUrl.url;
+                }
+              }
+
+              const urlStr = typeof streamUrl === 'string' ? streamUrl : '';
+              // More robust video link detection for AllManga
+              const isVideoLink = urlStr.includes('.mp4') || 
+                                 urlStr.includes('.m3u8') || 
+                                 urlStr.includes('.mkv') || 
+                                 urlStr.includes('video.wixstatic.com') ||
+                                 urlStr.includes('/hls/') ||
+                                 urlStr.includes('googlevideo.com');
+
+              let isEmbed = (s.type === 'iframe' || s.type === 'player' || s.isEmbed) && !isVideoLink;
+              
+              if (source === 'allmanga' && (serverName === 'DEFAULT' || serverName === 'ALLANIME') && isVideoLink) {
+                isEmbed = false;
+              }
+              
+              return {
+                url: urlStr,
+                server: s.server || s.name || 'Unknown Node',
+                type: s.type || 'Unknown',
+                isEmbed: isEmbed,
+                isVerified: true,
+                nodeId: `ZN-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+                subtitles: s.subtitles || []
+              };
+            }).filter(s => s.url && !seenUrls.has(s.url) && seenUrls.add(s.url));
+
+            if (normalized.length > 0) {
+              setAvailableServers(normalized);
+              setError(null); // Explicitly clear error before setting active source
+              setActiveSource(normalized[0]);
+              success = true;
+              setLoadProgress(60);
+              console.log(`[Zenith] Extraction successful via ${proxy.name}`);
+              break; 
+            }
+          }
         } catch (err: any) {
-          console.warn(`[Zenith] ${proxy.name} failed:`, typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
+          if (err.name === 'AbortError') {
+            console.log(`[Zenith] Fetch aborted for ${proxy.name}`);
+            return;
+          }
+          console.warn(`[Zenith] ${proxy.name} failed:`, err.message);
           lastError = err;
         }
       }
 
-      if (!success && !error) {
-        // If 404 and we have an alternative query, try it
+      if (!success && !signal.aborted) {
         if (lastError?.message?.includes('404') && alternativeQuery && searchQuery !== alternativeQuery && !isRetry) {
-          console.log(`[Zenith] Query "${searchQuery}" failed with 404. Retrying with alternative: "${alternativeQuery}"`);
           return fetchStreamData(alternativeQuery, true);
         }
-
-        if (lastError?.name === 'TypeError' || lastError?.message?.includes('Failed to fetch')) {
-          setError('Network connection blocked. Ensure the API port is set to Public in your environment.');
-        } else {
-          setError(lastError?.message || 'All synchronization routes exhausted. The Zenith Matrix is offline.');
-        }
+        setError(lastError?.message || 'The Zenith Matrix is offline.');
+        setLoadingStage('idle');
       }
-
-      setIsLoading(false);
+      
+      if (!signal.aborted) {
+        setIsLoading(false);
+      }
     };
 
     fetchStreamData(query);
+
+    return () => {
+      controller.abort();
+    };
   }, [query, alternativeQuery, episode, source, audioType]);
 
   /**
    * 3. Timestamp Logic: handleServerSwitch and onCanPlay
    */
   const handleServerSwitch = (server: ZenithSource) => {
+    if (server.url === activeSource?.url) return;
+    
     if (playerRef.current && !activeSource?.isEmbed) {
       // Save current timestamp before switching
       savedTimeRef.current = playerRef.current.currentTime;
       console.log(`[Zenith] Saving timestamp: ${savedTimeRef.current}s`);
     }
+    setError(null); // Clear error when manually switching servers
+    setLoadingStage('fetching');
+    setLoadProgress(10);
     setActiveSource(server);
   };
 
   const onCanPlay = () => {
+    setError(null); // Final clearance of any lingering errors when media is ready
+    setLoadingStage('ready');
+    setLoadProgress(100);
+    
     if (playerRef.current && savedTimeRef.current > 0) {
       console.log(`[Zenith] Resuming from saved timestamp: ${savedTimeRef.current}s`);
       playerRef.current.currentTime = savedTimeRef.current;
-      // We don't reset savedTimeRef immediately because multiple can-play events might fire
-      // but usually one is enough. We'll reset it to 0 after a successful seek.
       savedTimeRef.current = 0;
     }
   };
 
-  const handlePlayerError = () => {
-    if (!activeSource) return;
+  const handlePlayerError = (event: any) => {
+    // Ignore errors if we are currently loading a new batch or if no source is active
+    if (isLoading || !activeSource) return;
     
-    console.warn(`[Zenith] Server ${activeSource.server} failed. Attempting failover...`);
+    console.warn(`[Zenith] Media Error on ${activeSource.server}:`, event);
     
     if (availableServers.length > 1) {
       const currentIndex = availableServers.findIndex(s => s.url === activeSource.url);
@@ -254,6 +290,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
       // If we've looped back to the start, stop trying to avoid infinite loops
       if (nextIndex === 0 && currentIndex !== -1) {
         setError("All available servers failed to load. Please try a different extraction source or audio protocol.");
+        setLoadingStage('idle');
         return;
       }
 
@@ -261,6 +298,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
       handleServerSwitch(nextSource);
     } else {
       setError(`The server ${activeSource.server} failed to load and no fallback nodes are available.`);
+      setLoadingStage('idle');
     }
   };
 
@@ -271,7 +309,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
     const n = name.toLowerCase();
     
     // AllManga specific mappings
-    if (n === 'default') return { label: 'Zenith Prime', icon: <Zap size={10} />, color: 'text-blue-400', glow: 'shadow-blue-500/20' };
+    if (n === 'default' || n === 'allanime') return { label: 'Zenith Prime', icon: <Zap size={10} />, color: 'text-blue-400', glow: 'shadow-blue-500/20' };
     if (n === 'yt') return { label: 'Nexus MP4', icon: <Activity size={10} />, color: 'text-emerald-400', glow: 'shadow-emerald-500/20' };
     if (n === 's-mp4') return { label: 'Shadow Stream', icon: <Layers size={10} />, color: 'text-purple-400', glow: 'shadow-purple-500/20' };
     if (n === 'ok') return { label: 'Omega Node', icon: <Globe size={10} />, color: 'text-cyan-400', glow: 'shadow-cyan-500/20' };
@@ -292,6 +330,26 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
       color: 'text-slate-400',
       glow: 'shadow-white/5'
     };
+  };
+
+  const getStageColor = () => {
+    switch (loadingStage) {
+      case 'fetching': return 'text-blue-500';
+      case 'decrypting': return 'text-purple-500';
+      case 'buffering': return 'text-emerald-500';
+      case 'ready': return 'text-emerald-400';
+      default: return 'text-slate-500';
+    }
+  };
+
+  const getStageLabel = () => {
+    switch (loadingStage) {
+      case 'fetching': return 'Synchronizing Node';
+      case 'decrypting': return 'Decrypting Matrix';
+      case 'buffering': return 'Buffering Stream';
+      case 'ready': return 'Matrix Stable';
+      default: return 'Idle';
+    }
   };
 
   return (
@@ -330,15 +388,53 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
         )}
 
         {/* Loading State UI */}
-        {isLoading && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-md space-y-6">
-            <div className="relative">
-              <div className="w-20 h-20 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
-              <Activity className="absolute inset-0 m-auto text-blue-500 animate-pulse" size={24} />
-            </div>
-            <div className="text-center">
-              <p className="text-[10px] font-black uppercase tracking-[0.5em] text-blue-400">Loading stream...</p>
-              <p className="text-slate-500 text-[9px] mt-2 font-mono">SYNCHRONIZING ZENITH NODE...</p>
+        {(isLoading || (loadingStage !== 'ready' && loadingStage !== 'idle')) && !error && (
+          <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-md space-y-8 transition-opacity duration-700 ${loadingStage === 'ready' ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+            <div className="relative w-32 h-32">
+              {/* Progress Circle */}
+              <svg className="w-full h-full -rotate-90">
+                <circle
+                  cx="64"
+                  cy="64"
+                  r="60"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                  className="text-white/5"
+                />
+                <circle
+                  cx="64"
+                  cy="64"
+                  r="60"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                  strokeDasharray={377}
+                  strokeDashoffset={377 - (377 * loadProgress) / 100}
+                  strokeLinecap="round"
+                  className={`${getStageColor()} transition-all duration-500 ease-out`}
+                />
+              </svg>
+              
+              {/* Center Icon */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className={`transition-all duration-500 ${getStageColor()}`}>
+                  {loadingStage === 'fetching' && <Globe className="animate-pulse" size={32} />}
+                  {loadingStage === 'decrypting' && <Shield className="animate-bounce" size={32} />}
+                  {loadingStage === 'buffering' && <Activity className="animate-pulse" size={32} />}
+                  {loadingStage === 'ready' && <Zap size={32} />}
+                </div>
+              </div>
+
+              {/* Progress Text */}
+              <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 whitespace-nowrap">
+                <p className={`text-[10px] font-black uppercase tracking-[0.5em] ${getStageColor()}`}>
+                  {getStageLabel()}
+                </p>
+                <p className="text-slate-500 text-[8px] mt-1 text-center font-mono opacity-50">
+                  {loadProgress}% COMPLETE
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -357,8 +453,8 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
               onClick={() => {
                 setError(null);
                 setIsLoading(true);
+                setLoadingStage('fetching');
                 // Trigger a re-fetch by slightly changing a state or just calling the fetch logic again
-                // For simplicity, we'll just reload the page or re-trigger the effect
                 const currentSource = source;
                 setSource(currentSource === 'kuudere' ? 'allmanga' : 'kuudere');
                 setTimeout(() => setSource(currentSource), 10);
@@ -381,6 +477,10 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
                 allowFullScreen
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                 referrerPolicy="no-referrer"
+                onLoad={() => {
+                  setLoadingStage('ready');
+                  setLoadProgress(100);
+                }}
               />
               <div className="absolute bottom-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
                 <div className="bg-black/80 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-lg flex items-center gap-2">
@@ -390,38 +490,75 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
               </div>
             </div>
           ) : (
-            <MediaPlayer
-              ref={playerRef}
-              title={`${query} - Episode ${episode}`}
-              src={{
-                src: activeSource.url,
-                type: activeSource.url.includes('.txt') || activeSource.url.includes('.m3u8') ? 'application/x-mpegurl' : undefined
-              }}
-              onEnded={onComplete}
-              onCanPlay={onCanPlay}
-              onError={handlePlayerError}
-              className="w-full h-full"
-              playsInline
-            >
-              <MediaProvider>
-                <Poster
-                  className="vds-poster absolute inset-0 block h-full w-full opacity-0 transition-opacity data-[visible]:opacity-100"
-                  src={poster || "https://picsum.photos/seed/zenith/1280/720?blur=10"}
-                  alt="Poster"
-                />
-                {activeSource.subtitles?.map((track, i) => (
-                  <Track
-                    key={track.url}
-                    src={track.url}
-                    label={track.label}
-                    kind="subtitles"
-                    lang="en"
-                    default={i === 0}
+              <MediaPlayer
+                ref={playerRef}
+                title={`${query} - Episode ${episode}`}
+                src={{
+                  src: activeSource.url,
+                  type: activeSource.url.includes('.txt') || activeSource.url.includes('.m3u8') ? 'application/x-mpegurl' : undefined
+                }}
+                onEnded={onComplete}
+                onCanPlay={onCanPlay}
+                onWaiting={() => {
+                  setLoadingStage('buffering');
+                  setLoadProgress(85);
+                }}
+                onPlaying={() => {
+                  setLoadingStage('ready');
+                  setLoadProgress(100);
+                }}
+                onError={handlePlayerError}
+                onProviderSetup={(provider) => {
+                  if (provider.type === 'hls') {
+                    const hls = (provider as any).instance;
+                    if (hls) {
+                      hls.on(Hls.Events.MANIFEST_LOADING, () => {
+                        setLoadingStage('fetching');
+                        setLoadProgress(30);
+                      });
+                      hls.on(Hls.Events.MANIFEST_LOADED, () => {
+                        setLoadingStage('buffering');
+                        setLoadProgress(50);
+                      });
+                      hls.on(Hls.Events.FRAG_LOADING, () => {
+                        setLoadingStage('decrypting');
+                        setLoadProgress(70);
+                      });
+                      hls.on(Hls.Events.FRAG_DECRYPTED, () => {
+                        setLoadingStage('buffering');
+                        setLoadProgress(90);
+                      });
+                    }
+                    (provider as any).config = hlsConfig;
+                  }
+                }}
+                className="w-full h-full"
+                playsInline
+                crossOrigin
+              >
+                <MediaProvider>
+                  <Poster
+                    className="vds-poster absolute inset-0 block h-full w-full opacity-0 transition-opacity data-[visible]:opacity-100"
+                    src={poster || "https://picsum.photos/seed/zenith/1280/720?blur=10"}
+                    alt="Poster"
                   />
-                ))}
-              </MediaProvider>
-              <DefaultVideoLayout icons={defaultLayoutIcons} />
-            </MediaPlayer>
+                  {activeSource.subtitles?.map((track, i) => {
+                    const proxyBase = 'https://test.cors.workers.dev/?';
+                    const proxiedUrl = track.url.startsWith('http') ? proxyBase + encodeURIComponent(track.url) : track.url;
+                    return (
+                      <Track
+                        key={track.url}
+                        src={proxiedUrl}
+                        label={track.label}
+                        kind="subtitles"
+                        lang="en"
+                        default={i === 0}
+                      />
+                    );
+                  })}
+                </MediaProvider>
+                <DefaultVideoLayout icons={defaultLayoutIcons} />
+              </MediaPlayer>
           )
         )}
 
@@ -439,25 +576,30 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
       {/* 3. UI Elements: Controls Section */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Source Toggle */}
-        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-5 rounded-3xl flex flex-col gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 bg-blue-500/10 rounded-xl flex items-center justify-center border border-blue-500/20">
-              <Globe size={18} className="text-blue-500" />
+        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 transition-all hover:border-white/10 group/card">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center border border-blue-500/20 group-hover/card:scale-110 transition-transform">
+                <Globe size={20} className="text-blue-500" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Extraction Source</p>
+                <p className="text-sm font-black text-white uppercase tracking-tight">{source}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Extraction Source</p>
-              <p className="text-xs font-bold text-white uppercase">{source}</p>
+            <div className="opacity-0 group-hover/card:opacity-100 transition-opacity">
+              <Info size={14} className="text-slate-600" />
             </div>
           </div>
           
-          <div className="flex gap-1.5 p-1 bg-black/40 rounded-2xl border border-white/10">
+          <div className="flex gap-1.5 p-1.5 bg-black/60 rounded-2xl border border-white/5">
             {(['kuudere', 'allmanga'] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setSource(s)}
-                className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
                   source === s 
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' 
+                    ? 'bg-blue-600 text-white shadow-xl shadow-blue-600/30 scale-[1.02]' 
                     : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
                 }`}
               >
@@ -468,25 +610,30 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
         </div>
 
         {/* Audio Type Toggle */}
-        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-5 rounded-3xl flex flex-col gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/20">
-              <Headphones size={18} className="text-emerald-500" />
+        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 transition-all hover:border-white/10 group/card">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center border border-emerald-500/20 group-hover/card:scale-110 transition-transform">
+                <Headphones size={20} className="text-emerald-500" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Audio Protocol</p>
+                <p className="text-sm font-black text-white uppercase tracking-tight">{audioType}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Audio Protocol</p>
-              <p className="text-xs font-bold text-white uppercase">{audioType}</p>
+            <div className="opacity-0 group-hover/card:opacity-100 transition-opacity">
+              <Shield size={14} className="text-slate-600" />
             </div>
           </div>
           
-          <div className="flex gap-1.5 p-1 bg-black/40 rounded-2xl border border-white/10">
+          <div className="flex gap-1.5 p-1.5 bg-black/60 rounded-2xl border border-white/5">
             {(['sub', 'dub'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setAudioType(t)}
-                className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
                   audioType === t 
-                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' 
+                    ? 'bg-emerald-600 text-white shadow-xl shadow-emerald-600/30 scale-[1.02]' 
                     : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
                 }`}
               >
@@ -497,20 +644,25 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
         </div>
 
         {/* Server Selector */}
-        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-5 rounded-3xl flex flex-col gap-4 md:col-span-2 lg:col-span-1">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 bg-purple-500/10 rounded-xl flex items-center justify-center border border-purple-500/20">
-              <Layers size={18} className="text-purple-500" />
+        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 md:col-span-2 lg:col-span-1 transition-all hover:border-white/10 group/card">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-purple-500/10 rounded-2xl flex items-center justify-center border border-purple-500/20 group-hover/card:scale-110 transition-transform">
+                <Layers size={20} className="text-purple-500" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Server Matrix</p>
+                <p className="text-sm font-black text-white uppercase tracking-tight">
+                  {activeSource ? getServerDisplay(activeSource.server).label : 'Awaiting Selection'}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Server Matrix</p>
-              <p className="text-xs font-bold text-white uppercase">
-                {activeSource ? getServerDisplay(activeSource.server).label : 'Awaiting Selection'}
-              </p>
+            <div className="flex items-center gap-1.5 bg-purple-500/10 px-2 py-1 rounded-full border border-purple-500/20">
+              <span className="text-[8px] font-black text-purple-400 uppercase tracking-widest">{availableServers.length} Nodes</span>
             </div>
           </div>
           
-          <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[200px] pr-2 custom-scrollbar">
+          <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[220px] pr-2 custom-scrollbar">
             {availableServers.length > 0 ? (
               availableServers.map((s, idx) => {
                 const display = getServerDisplay(s.server);
@@ -519,41 +671,54 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
                   <button
                     key={`${s.server}-${idx}`}
                     onClick={() => handleServerSwitch(s)}
-                    className={`relative p-3 rounded-2xl text-left transition-all border group/btn ${
+                    className={`relative p-4 rounded-2xl text-left transition-all border group/btn flex flex-col gap-2 ${
                       isActive 
-                        ? `bg-purple-600/10 border-purple-500 shadow-lg ${display.glow}` 
-                        : 'bg-black/40 border-white/5 hover:border-white/20'
+                        ? `bg-purple-600/10 border-purple-500 shadow-xl ${display.glow} scale-[1.02]` 
+                        : 'bg-black/40 border-white/5 hover:border-white/20 hover:bg-black/60'
                     }`}
                   >
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center justify-between">
-                        <span className={`text-[8px] font-mono ${isActive ? 'text-purple-400' : 'text-slate-600'}`}>
-                          {s.nodeId}
-                        </span>
-                        <div className={isActive ? 'text-purple-400' : 'text-slate-500'}>
-                          {display.icon}
-                        </div>
-                      </div>
-                      <span className={`text-[10px] font-black uppercase tracking-tight truncate ${isActive ? 'text-white' : 'text-slate-400 group-hover/btn:text-slate-200'}`}>
-                        {display.label}
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[8px] font-mono ${isActive ? 'text-purple-400' : 'text-slate-600'}`}>
+                        {s.nodeId}
                       </span>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <div className={`w-1 h-1 rounded-full ${s.isVerified ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
-                        <span className={`text-[7px] font-bold uppercase tracking-widest ${s.isVerified ? 'text-emerald-500/60' : 'text-amber-500/60'}`}>
-                          {s.isVerified ? 'Verified' : 'Unverified'}
-                        </span>
+                      <div className={isActive ? 'text-purple-400' : 'text-slate-500 group-hover/btn:text-slate-300 transition-colors'}>
+                        {display.icon}
                       </div>
                     </div>
+                    
+                    <span className={`text-[11px] font-black uppercase tracking-tight truncate ${isActive ? 'text-white' : 'text-slate-400 group-hover/btn:text-slate-200'}`}>
+                      {display.label}
+                    </span>
+                    
+                    <div className="flex items-center justify-between mt-auto pt-1">
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-1 h-1 rounded-full ${s.isVerified ? 'bg-emerald-500' : 'bg-amber-500'} ${isActive ? 'animate-pulse' : ''}`}></div>
+                        <span className={`text-[7px] font-black uppercase tracking-widest ${s.isVerified ? 'text-emerald-500/60' : 'text-amber-500/60'}`}>
+                          {s.isVerified ? 'Stable' : 'Unstable'}
+                        </span>
+                      </div>
+                      {s.isEmbed && (
+                        <div className="bg-white/5 px-1.5 py-0.5 rounded-md border border-white/5">
+                          <span className="text-[7px] font-black text-slate-600 uppercase">Embed</span>
+                        </div>
+                      )}
+                    </div>
+
                     {isActive && (
-                      <div className="absolute top-1 right-1">
-                        <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-ping"></div>
+                      <div className="absolute -top-1 -right-1">
+                        <div className="w-3 h-3 bg-purple-500 rounded-full border-2 border-slate-950 flex items-center justify-center">
+                          <div className="w-1 h-1 bg-white rounded-full animate-pulse"></div>
+                        </div>
                       </div>
                     )}
                   </button>
                 );
               })
             ) : (
-              <p className="text-[9px] text-slate-600 uppercase font-bold px-2 col-span-2">No servers available</p>
+              <div className="col-span-2 py-8 flex flex-col items-center justify-center gap-3 bg-black/20 rounded-2xl border border-dashed border-white/5">
+                <Loader2 size={16} className="text-slate-700 animate-spin" />
+                <p className="text-[9px] text-slate-600 uppercase font-black tracking-widest">Scanning for nodes...</p>
+              </div>
             )}
           </div>
         </div>
