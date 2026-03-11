@@ -81,7 +81,7 @@ const Player: React.FC<PlayerProps> = ({ source, title, poster, onProgress, onCo
 
       hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
         if (data.fatal) {
-          console.error('HLS Fatal Error:', data);
+          console.error('HLS Fatal Error:', typeof data === 'object' ? (data?.type || 'Unknown HLS Error') : String(data));
           setStatus({
             stage: 'error',
             progress: 0,

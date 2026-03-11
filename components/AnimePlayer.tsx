@@ -24,7 +24,13 @@ function resolveSourceUrl(url: string): string {
 const AnimePlayer: React.FC<AnimePlayerProps> = ({ sources, title, poster, onProgress, onComplete }) => {
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const activeSource = sources[activeSourceIndex] || sources[0];
-  const resolvedUrl = useMemo(() => resolveSourceUrl(activeSource?.url), [activeSource]);
+  const resolvedUrl = useMemo(() => {
+    const url = resolveSourceUrl(activeSource?.url);
+    if (url.startsWith('http') && activeSource?.type === SourceType.DIRECT) {
+      return `https://test.cors.workers.dev/?${encodeURIComponent(url)}`;
+    }
+    return url;
+  }, [activeSource]);
 
   const hlsConfig = useMemo(() => {
     if (!Hls.isSupported()) return {};
@@ -32,13 +38,6 @@ const AnimePlayer: React.FC<AnimePlayerProps> = ({ sources, title, poster, onPro
     const proxyBase = 'https://test.cors.workers.dev/?';
     
     return {
-      fetchSetup: (url: string, init: RequestInit) => {
-        // Proxy HLS manifest, segments and keys
-        if (url.includes('.m3u8') || url.includes('.ts') || url.includes('.key') || url.includes('.txt') || url.includes('.urlset')) {
-          return new Request(proxyBase + encodeURIComponent(url), init);
-        }
-        return new Request(url, init);
-      },
       xhrSetup: (xhr: XMLHttpRequest, url: string) => {
         xhr.withCredentials = false;
       },
@@ -98,7 +97,15 @@ const AnimePlayer: React.FC<AnimePlayerProps> = ({ sources, title, poster, onPro
               onTimeUpdate={handleTimeUpdate}
               onProviderSetup={(provider) => {
                 if (provider.type === 'hls') {
-                  (provider as any).config = hlsConfig;
+                  const hls = (provider as any).instance;
+                  if (hls) {
+                    // Additional HLS.js event listeners can be added here if needed
+                  }
+                  try {
+                    (provider as any).config = { ...(provider as any).config, ...hlsConfig };
+                  } catch (e) {
+                    console.warn("Failed to apply hlsConfig in AnimePlayer", e);
+                  }
                 }
               }}
               crossOrigin

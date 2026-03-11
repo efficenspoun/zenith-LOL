@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MediaPlayer, MediaProvider, Poster, Track, type MediaPlayerInstance } from '@vidstack/react';
 import { defaultLayoutIcons, DefaultVideoLayout } from '@vidstack/react/player/layouts/default';
-import { Play, Server, Headphones, Globe, Loader2, AlertCircle, Activity, RefreshCw, Layers, Zap, Shield, Info, ExternalLink, ChevronRight } from 'lucide-react';
+import { Play, Server, Headphones, Globe, Loader2, AlertCircle, Activity, RefreshCw, Layers, Zap, Shield, Info, ExternalLink, ChevronRight, ChevronDown } from 'lucide-react';
 import Hls from 'hls.js';
 
 import '@vidstack/react/player/styles/default/theme.css';
@@ -30,7 +30,8 @@ interface ZenithSource {
   isEmbed?: boolean;
   isVerified?: boolean;
   nodeId?: string;
-  subtitles?: { url: string; label: string }[];
+  subtitles?: { url: string; label: string; srcLang?: string }[];
+  thumbnails?: string;
 }
 
 interface ZenithApiResponse {
@@ -42,7 +43,7 @@ type LoadingStage = 'fetching' | 'decrypting' | 'buffering' | 'ready' | 'idle';
 
 const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, episode, poster, onComplete }) => {
   // 1. State Management
-  const [source, setSource] = useState<'kuudere' | 'allmanga'>('kuudere');
+  const [source, setSource] = useState<'kuudere' | 'allmanga' | 'anizone'>('kuudere');
   const [audioType, setAudioType] = useState<'sub' | 'dub'>('sub');
   const [availableServers, setAvailableServers] = useState<ZenithSource[]>([]);
   const [activeSource, setActiveSource] = useState<ZenithSource | null>(null);
@@ -51,7 +52,32 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingStage, setLoadingStage] = useState<LoadingStage>('idle');
   const [loadProgress, setLoadProgress] = useState<number>(0);
+  const [loadingText, setLoadingText] = useState('Locating source...');
   const [error, setError] = useState<string | null>(null);
+
+  // Cycling Loading Text Effect
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingText('Locating source...');
+      return;
+    }
+    
+    const messages = [
+      "Locating source...",
+      "Fetching streams...",
+      "Loading player...",
+      "Synchronizing nodes...",
+      "Bypassing firewalls...",
+      "Optimizing playback..."
+    ];
+    let i = 0;
+    const interval = setInterval(() => {
+      i = (i + 1) % messages.length;
+      setLoadingText(messages[i]);
+    }, 2500);
+    
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   // Clear error whenever activeSource changes as a safety net
   useEffect(() => {
@@ -72,25 +98,21 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
   const hlsConfig = useMemo(() => {
     if (!Hls.isSupported()) return {};
     
-    const proxyBase = 'https://test.cors.workers.dev/?';
-    
     return {
-      fetchSetup: (url: string, init: RequestInit) => {
-        // Proxy HLS manifest, segments, keys and other related files
-        const hlsExtensions = ['.m3u8', '.ts', '.key', '.txt', '.urlset', '.vtt', '.srt'];
-        if (hlsExtensions.some(ext => url.includes(ext))) {
-          return new Request(proxyBase + encodeURIComponent(url), init);
-        }
-        return new Request(url, init);
-      },
-      xhrSetup: (xhr: XMLHttpRequest, url: string) => {
-        xhr.withCredentials = false;
-      },
       enableWorker: true,
       lowLatencyMode: true,
       backBufferLength: 90,
       maxBufferLength: 60,
       maxMaxBufferLength: 600,
+      // Add more robust HLS settings
+      startLevel: -1,
+      autoStartLoad: true,
+      capLevelToPlayerSize: true,
+      debug: false,
+      xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+        xhr.withCredentials = false;
+        // We can add custom headers here if needed
+      }
     };
   }, [activeSource]);
 
@@ -193,8 +215,35 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
 
               let isEmbed = (s.type === 'iframe' || s.type === 'player' || s.isEmbed) && !isVideoLink;
               
-              if (source === 'allmanga' && (serverName === 'DEFAULT' || serverName === 'ALLANIME') && isVideoLink) {
-                isEmbed = false;
+      if (source === 'allmanga' && (serverName === 'DEFAULT' || serverName === 'ALLANIME')) {
+                // AllManga specific parsing for direct links
+                if (typeof streamUrl === 'object' && streamUrl !== null) {
+                  if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
+                    const preferred = streamUrl.sources.find((src: any) => src.quality === '1080p') || 
+                                    streamUrl.sources.find((src: any) => src.quality === '720p') || 
+                                    streamUrl.sources[0];
+                    streamUrl = preferred?.url || '';
+                  } else if (streamUrl.url) {
+                    streamUrl = streamUrl.url;
+                  }
+                }
+                
+                // If it's still an object or empty, it might be a complex structure
+                if (typeof streamUrl !== 'string') {
+                  streamUrl = String(streamUrl || '');
+                }
+                
+                // AllManga direct links are often HLS but sometimes MP4
+                if (streamUrl.includes('.m3u8') || streamUrl.includes('.mp4')) {
+                  isEmbed = false;
+                }
+              }
+
+              // Anizone Specific Parser Logic
+              let processedSubtitles = s.subtitles || [];
+              if (source === 'anizone') {
+                // Filter out empty URLs and keep only valid links (usually .ass or .vtt)
+                processedSubtitles = (s.subtitles || []).filter((sub: any) => sub.url && sub.url.trim() !== "");
               }
               
               return {
@@ -204,7 +253,8 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
                 isEmbed: isEmbed,
                 isVerified: true,
                 nodeId: `ZN-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-                subtitles: s.subtitles || []
+                subtitles: processedSubtitles,
+                thumbnails: s.thumbnails
               };
             }).filter(s => s.url && !seenUrls.has(s.url) && seenUrls.add(s.url));
 
@@ -281,7 +331,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
     // Ignore errors if we are currently loading a new batch or if no source is active
     if (isLoading || !activeSource) return;
     
-    console.warn(`[Zenith] Media Error on ${activeSource.server}:`, event);
+    console.warn(`[Zenith] Media Error on ${activeSource.server}:`, typeof event === 'object' ? (event?.message || 'Unknown Media Error') : String(event));
     
     if (availableServers.length > 1) {
       const currentIndex = availableServers.findIndex(s => s.url === activeSource.url);
@@ -310,6 +360,10 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
     
     // AllManga specific mappings
     if (n === 'default' || n === 'allanime') return { label: 'Zenith Prime', icon: <Zap size={10} />, color: 'text-blue-400', glow: 'shadow-blue-500/20' };
+    
+    // Anizone specific mappings
+    if (n === 'vid-cdn') return { label: 'Anizone Edge', icon: <Activity size={10} />, color: 'text-orange-400', glow: 'shadow-orange-500/20' };
+    
     if (n === 'yt') return { label: 'Nexus MP4', icon: <Activity size={10} />, color: 'text-emerald-400', glow: 'shadow-emerald-500/20' };
     if (n === 's-mp4') return { label: 'Shadow Stream', icon: <Layers size={10} />, color: 'text-purple-400', glow: 'shadow-purple-500/20' };
     if (n === 'ok') return { label: 'Omega Node', icon: <Globe size={10} />, color: 'text-cyan-400', glow: 'shadow-cyan-500/20' };
@@ -342,15 +396,22 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
     }
   };
 
-  const getStageLabel = () => {
-    switch (loadingStage) {
-      case 'fetching': return 'Synchronizing Node';
-      case 'decrypting': return 'Decrypting Matrix';
-      case 'buffering': return 'Buffering Stream';
-      case 'ready': return 'Matrix Stable';
-      default: return 'Idle';
-    }
-  };
+  const groupedServers = useMemo(() => {
+    const groups: Record<string, ZenithSource[]> = {
+      'Direct Streams': [],
+      'Embed Nodes': []
+    };
+    
+    availableServers.forEach(s => {
+      if (s.isEmbed) {
+        groups['Embed Nodes'].push(s);
+      } else {
+        groups['Direct Streams'].push(s);
+      }
+    });
+    
+    return groups;
+  }, [availableServers]);
 
   return (
     <div className="w-full flex flex-col gap-6 animate-in fade-in duration-500">
@@ -429,7 +490,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
               {/* Progress Text */}
               <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 whitespace-nowrap">
                 <p className={`text-[10px] font-black uppercase tracking-[0.5em] ${getStageColor()}`}>
-                  {getStageLabel()}
+                  {loadingText}
                 </p>
                 <p className="text-slate-500 text-[8px] mt-1 text-center font-mono opacity-50">
                   {loadProgress}% COMPLETE
@@ -494,7 +555,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
                 ref={playerRef}
                 title={`${query} - Episode ${episode}`}
                 src={{
-                  src: activeSource.url,
+                  src: activeSource.url.startsWith('http') ? `https://test.cors.workers.dev/?${encodeURIComponent(activeSource.url)}` : activeSource.url,
                   type: activeSource.url.includes('.txt') || activeSource.url.includes('.m3u8') ? 'application/x-mpegurl' : undefined
                 }}
                 onEnded={onComplete}
@@ -529,7 +590,12 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
                         setLoadProgress(90);
                       });
                     }
-                    (provider as any).config = hlsConfig;
+                    // Use a safer way to apply config
+                    try {
+                      (provider as any).config = { ...(provider as any).config, ...hlsConfig };
+                    } catch (e) {
+                      console.warn("Failed to apply hlsConfig via provider.config", e);
+                    }
                   }
                 }}
                 className="w-full h-full"
@@ -557,7 +623,10 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
                     );
                   })}
                 </MediaProvider>
-                <DefaultVideoLayout icons={defaultLayoutIcons} />
+                <DefaultVideoLayout 
+                  icons={defaultLayoutIcons} 
+                  thumbnails={activeSource.thumbnails ? (activeSource.thumbnails.startsWith('http') ? `https://test.cors.workers.dev/?${encodeURIComponent(activeSource.thumbnails)}` : activeSource.thumbnails) : undefined} 
+                />
               </MediaPlayer>
           )
         )}
@@ -574,77 +643,75 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
       </div>
 
       {/* 3. UI Elements: Controls Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Source Toggle */}
-        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 transition-all hover:border-white/10 group/card">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center border border-blue-500/20 group-hover/card:scale-110 transition-transform">
-                <Globe size={20} className="text-blue-500" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left Column: Source and Audio */}
+        <div className="flex flex-col gap-6">
+          {/* Source Dropdown */}
+          <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 transition-all hover:border-white/10 group/card">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center border border-blue-500/20 group-hover/card:scale-110 transition-transform">
+                  <Globe size={20} className="text-blue-500" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Extraction Source</p>
+                  <div className="relative mt-2">
+                    <select 
+                      value={source}
+                      onChange={(e) => setSource(e.target.value as any)}
+                      className="w-full bg-black/60 border border-white/10 rounded-xl px-4 py-3 text-sm font-black text-white uppercase tracking-tight focus:outline-none focus:border-blue-500/50 appearance-none pr-10 cursor-pointer transition-all hover:bg-black/80"
+                    >
+                      <option value="kuudere">Kuudere</option>
+                      <option value="allmanga">AllManga</option>
+                      <option value="anizone">Anizone</option>
+                    </select>
+                    <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                  </div>
+                </div>
               </div>
-              <div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Extraction Source</p>
-                <p className="text-sm font-black text-white uppercase tracking-tight">{source}</p>
+              <div className="opacity-0 group-hover/card:opacity-100 transition-opacity">
+                <Info size={14} className="text-slate-600" />
               </div>
-            </div>
-            <div className="opacity-0 group-hover/card:opacity-100 transition-opacity">
-              <Info size={14} className="text-slate-600" />
             </div>
           </div>
-          
-          <div className="flex gap-1.5 p-1.5 bg-black/60 rounded-2xl border border-white/5">
-            {(['kuudere', 'allmanga'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setSource(s)}
-                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                  source === s 
-                    ? 'bg-blue-600 text-white shadow-xl shadow-blue-600/30 scale-[1.02]' 
-                    : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
+
+          {/* Audio Type Toggle */}
+          <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 transition-all hover:border-white/10 group/card">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center border border-emerald-500/20 group-hover/card:scale-110 transition-transform">
+                  <Headphones size={20} className="text-emerald-500" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Audio Protocol</p>
+                  <p className="text-sm font-black text-white uppercase tracking-tight">{audioType}</p>
+                </div>
+              </div>
+              <div className="opacity-0 group-hover/card:opacity-100 transition-opacity">
+                <Shield size={14} className="text-slate-600" />
+              </div>
+            </div>
+            
+            <div className="flex gap-1.5 p-1.5 bg-black/60 rounded-2xl border border-white/5">
+              {(['sub', 'dub'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setAudioType(t)}
+                  className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    audioType === t 
+                      ? 'bg-emerald-600 text-white shadow-xl shadow-emerald-600/30 scale-[1.02]' 
+                      : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Audio Type Toggle */}
+        {/* Right Column: Server Selector */}
         <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 transition-all hover:border-white/10 group/card">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center border border-emerald-500/20 group-hover/card:scale-110 transition-transform">
-                <Headphones size={20} className="text-emerald-500" />
-              </div>
-              <div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Audio Protocol</p>
-                <p className="text-sm font-black text-white uppercase tracking-tight">{audioType}</p>
-              </div>
-            </div>
-            <div className="opacity-0 group-hover/card:opacity-100 transition-opacity">
-              <Shield size={14} className="text-slate-600" />
-            </div>
-          </div>
-          
-          <div className="flex gap-1.5 p-1.5 bg-black/60 rounded-2xl border border-white/5">
-            {(['sub', 'dub'] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setAudioType(t)}
-                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                  audioType === t 
-                    ? 'bg-emerald-600 text-white shadow-xl shadow-emerald-600/30 scale-[1.02]' 
-                    : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Server Selector */}
-        <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 p-6 rounded-[2rem] flex flex-col gap-5 md:col-span-2 lg:col-span-1 transition-all hover:border-white/10 group/card">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-purple-500/10 rounded-2xl flex items-center justify-center border border-purple-500/20 group-hover/card:scale-110 transition-transform">
@@ -662,60 +729,67 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
             </div>
           </div>
           
-          <div className="grid grid-cols-2 gap-2 overflow-y-auto max-h-[220px] pr-2 custom-scrollbar">
+          <div className="flex flex-col gap-6 overflow-y-auto max-h-[450px] pr-2 custom-scrollbar">
             {availableServers.length > 0 ? (
-              availableServers.map((s, idx) => {
-                const display = getServerDisplay(s.server);
-                const isActive = activeSource?.url === s.url;
-                return (
-                  <button
-                    key={`${s.server}-${idx}`}
-                    onClick={() => handleServerSwitch(s)}
-                    className={`relative p-4 rounded-2xl text-left transition-all border group/btn flex flex-col gap-2 ${
-                      isActive 
-                        ? `bg-purple-600/10 border-purple-500 shadow-xl ${display.glow} scale-[1.02]` 
-                        : 'bg-black/40 border-white/5 hover:border-white/20 hover:bg-black/60'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`text-[8px] font-mono ${isActive ? 'text-purple-400' : 'text-slate-600'}`}>
-                        {s.nodeId}
-                      </span>
-                      <div className={isActive ? 'text-purple-400' : 'text-slate-500 group-hover/btn:text-slate-300 transition-colors'}>
-                        {display.icon}
-                      </div>
-                    </div>
-                    
-                    <span className={`text-[11px] font-black uppercase tracking-tight truncate ${isActive ? 'text-white' : 'text-slate-400 group-hover/btn:text-slate-200'}`}>
-                      {display.label}
-                    </span>
-                    
-                    <div className="flex items-center justify-between mt-auto pt-1">
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-1 h-1 rounded-full ${s.isVerified ? 'bg-emerald-500' : 'bg-amber-500'} ${isActive ? 'animate-pulse' : ''}`}></div>
-                        <span className={`text-[7px] font-black uppercase tracking-widest ${s.isVerified ? 'text-emerald-500/60' : 'text-amber-500/60'}`}>
-                          {s.isVerified ? 'Stable' : 'Unstable'}
-                        </span>
-                      </div>
-                      {s.isEmbed && (
-                        <div className="bg-white/5 px-1.5 py-0.5 rounded-md border border-white/5">
-                          <span className="text-[7px] font-black text-slate-600 uppercase">Embed</span>
-                        </div>
-                      )}
-                    </div>
+              Object.entries(groupedServers).map(([groupName, servers]) => (
+                servers.length > 0 && (
+                  <div key={groupName} className="space-y-3">
+                    <h4 className="text-[9px] font-black text-slate-600 uppercase tracking-[0.3em] px-2 flex items-center gap-2">
+                      <div className="w-1 h-1 rounded-full bg-slate-700"></div>
+                      {groupName}
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {servers.map((s, idx) => {
+                        const display = getServerDisplay(s.server);
+                        const isActive = activeSource?.url === s.url;
+                        return (
+                          <button
+                            key={`${s.server}-${idx}`}
+                            onClick={() => handleServerSwitch(s)}
+                            className={`relative p-4 rounded-2xl text-left transition-all border group/btn flex flex-col gap-2 ${
+                              isActive 
+                                ? `bg-purple-600/10 border-purple-500 shadow-xl ${display.glow} scale-[1.02]` 
+                                : 'bg-black/40 border-white/5 hover:border-white/20 hover:bg-black/60'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className={`text-[8px] font-mono ${isActive ? 'text-purple-400' : 'text-slate-600'}`}>
+                                {s.nodeId}
+                              </span>
+                              <div className={isActive ? 'text-purple-400' : 'text-slate-500 group-hover/btn:text-slate-300 transition-colors'}>
+                                {display.icon}
+                              </div>
+                            </div>
+                            
+                            <span className={`text-[11px] font-black uppercase tracking-tight truncate ${isActive ? 'text-white' : 'text-slate-400 group-hover/btn:text-slate-200'}`}>
+                              {display.label}
+                            </span>
+                            
+                            <div className="flex items-center justify-between mt-auto pt-1">
+                              <div className="flex items-center gap-1.5">
+                                <div className={`w-1 h-1 rounded-full ${s.isVerified ? 'bg-emerald-500' : 'bg-amber-500'} ${isActive ? 'animate-pulse' : ''}`}></div>
+                                <span className={`text-[7px] font-black uppercase tracking-widest ${s.isVerified ? 'text-emerald-500/60' : 'text-amber-500/60'}`}>
+                                  {s.isVerified ? 'Stable' : 'Unstable'}
+                                </span>
+                              </div>
+                            </div>
 
-                    {isActive && (
-                      <div className="absolute -top-1 -right-1">
-                        <div className="w-3 h-3 bg-purple-500 rounded-full border-2 border-slate-950 flex items-center justify-center">
-                          <div className="w-1 h-1 bg-white rounded-full animate-pulse"></div>
-                        </div>
-                      </div>
-                    )}
-                  </button>
-                );
-              })
+                            {isActive && (
+                              <div className="absolute -top-1 -right-1">
+                                <div className="w-3 h-3 bg-purple-500 rounded-full border-2 border-slate-950 flex items-center justify-center">
+                                  <div className="w-1 h-1 bg-white rounded-full animate-pulse"></div>
+                                </div>
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )
+              ))
             ) : (
-              <div className="col-span-2 py-8 flex flex-col items-center justify-center gap-3 bg-black/20 rounded-2xl border border-dashed border-white/5">
+              <div className="py-8 flex flex-col items-center justify-center gap-3 bg-black/20 rounded-2xl border border-dashed border-white/5">
                 <Loader2 size={16} className="text-slate-700 animate-spin" />
                 <p className="text-[9px] text-slate-600 uppercase font-black tracking-widest">Scanning for nodes...</p>
               </div>
@@ -729,7 +803,7 @@ const ZenithPlayer: React.FC<ZenithPlayerProps> = ({ query, alternativeQuery, ep
         <div className="flex items-center gap-3">
           <div className={`w-1.5 h-1.5 rounded-full ${isLoading ? 'bg-blue-500 animate-pulse' : 'bg-emerald-500'}`}></div>
           <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
-            {isLoading ? 'Synchronizing Node...' : 'Matrix Link Stable'}
+            {isLoading ? loadingText : 'Matrix Link Stable'}
           </span>
         </div>
         <div className="flex items-center gap-6">

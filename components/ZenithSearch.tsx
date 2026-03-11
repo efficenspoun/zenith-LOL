@@ -130,12 +130,16 @@ const ZenithSearch: React.FC = () => {
                 }
               }
 
-              const urlStr = typeof streamUrl === 'string' ? streamUrl : '';
+              if (typeof streamUrl !== 'string') {
+                streamUrl = String(streamUrl || '');
+              }
+
+              const urlStr = streamUrl;
               const isVideoLink = urlStr.includes('.mp4') || urlStr.includes('.m3u8') || urlStr.includes('.mkv') || urlStr.includes('video.wixstatic.com');
 
               // Determine if it's an embed
               let isEmbed = (s.type === 'iframe' || s.type === 'player' || s.isEmbed) && !isVideoLink;
-              if (source === 'allmanga' && serverName === 'DEFAULT' && isVideoLink) {
+              if (source === 'allmanga' && (serverName === 'DEFAULT' || serverName === 'ALLANIME') && isVideoLink) {
                 isEmbed = false;
               }
 

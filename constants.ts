@@ -50,5 +50,16 @@ export const DEFAULT_PLUGINS: SourcePlugin[] = [
     url: '', 
     priority: 4,
     requiresCorsProxy: false
+  },
+  {
+    id: 'anizone-sub',
+    provider: 'Anizone',
+    name: 'Anizone Stream',
+    label: 'Anizone (Sub)',
+    type: SourceType.DIRECT,
+    category: 'softsub',
+    url: '',
+    priority: 5,
+    requiresCorsProxy: false
   }
 ];

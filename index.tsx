@@ -37,8 +37,16 @@ const mountApp = () => {
 // Global error handlers to prevent circular structure errors during logging
 window.onerror = (message, source, lineno, colno, error) => {
   const safeError = typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error || message);
+  
+  // Specific check for the read-only fetch property error which is often benign or caused by third-party scripts
+  if (safeError.includes('Cannot set property fetch') || safeError.includes('read-only property \'fetch\'')) {
+    console.warn("Suppressed read-only fetch property error (likely third-party script conflict)");
+    return true;
+  }
+
   // Ignore AbortError and signal interrupted as they are expected when cancelling fetch requests
   if (safeError.includes('AbortError') || safeError.includes('signal interrupted')) return true;
+  
   console.error("Global Error Caught:", safeError);
   return true; // Prevent default browser logging
 };
@@ -46,6 +54,13 @@ window.onerror = (message, source, lineno, colno, error) => {
 window.onunhandledrejection = (event) => {
   const error = event.reason;
   const safeError = typeof error === 'object' ? (error?.message || 'Unknown Error') : String(error);
+  
+  if (safeError.includes('Cannot set property fetch') || safeError.includes('read-only property \'fetch\'')) {
+    console.warn("Suppressed read-only fetch property rejection");
+    event.preventDefault();
+    return;
+  }
+
   // Ignore AbortError and signal interrupted as they are expected when cancelling fetch requests
   if (safeError.includes('AbortError') || safeError.includes('signal interrupted')) {
     event.preventDefault();

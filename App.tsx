@@ -25,9 +25,10 @@ const App: React.FC = () => {
   
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [displayedEpisodes, setDisplayedEpisodes] = useState<Episode[]>([]);
-  const [batchPage, setBatchPage] = useState(1);
+  const [episodeRanges, setEpisodeRanges] = useState<{start: number, end: number}[]>([]);
+  const [activeRangeIndex, setActiveRangeIndex] = useState(0);
   const [isAppending, setIsAppending] = useState(false);
-  const BATCH_SIZE = 50;
+  const BATCH_SIZE = 100;
 
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
   const [availableSources, setAvailableSources] = useState<SourceResult[]>([]);
@@ -39,6 +40,14 @@ const App: React.FC = () => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [view, setView] = useState<'player' | 'zenith-search'>('player');
   const [token, setToken] = useState<string | null>(localStorage.getItem('anilist_token'));
+  const [syncToast, setSyncToast] = useState<{show: boolean, message: string} | null>(null);
+
+  useEffect(() => {
+    if (syncToast?.show) {
+      const timer = setTimeout(() => setSyncToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [syncToast]);
 
   useEffect(() => {
     const hash = window.location.hash;
@@ -84,10 +93,24 @@ const App: React.FC = () => {
   const fetchEpisodes = async (anime: Anime) => {
     try {
       const resp = await getAnimeEpisodes(anime.mal_id);
-      setAllEpisodes(resp.data);
-      setDisplayedEpisodes(resp.data.slice(0, BATCH_SIZE));
-      setBatchPage(1);
-      return resp.data;
+      let episodes = resp.data;
+      
+      // If there are more pages, we could fetch them, but for now let's use the total count to create ranges
+      const totalEpisodes = anime.episodes || (resp.pagination.has_next_page ? resp.pagination.last_visible_page * 100 : episodes.length);
+      
+      const ranges = [];
+      for (let i = 0; i < totalEpisodes; i += BATCH_SIZE) {
+        ranges.push({ start: i + 1, end: Math.min(i + BATCH_SIZE, totalEpisodes) });
+      }
+      setEpisodeRanges(ranges);
+      setActiveRangeIndex(0);
+      
+      // If the first page doesn't have all episodes for the first range, we might need to fetch more
+      // But usually Jikan returns 100 per page.
+      
+      setAllEpisodes(episodes);
+      setDisplayedEpisodes(episodes.filter(ep => ep.number >= 1 && ep.number <= BATCH_SIZE));
+      return episodes;
     } catch (err: any) {
       console.error("Failed to fetch real episodes, falling back to mock:", typeof err === 'object' ? (err?.message || 'Unknown Error') : String(err));
       const mockCount = anime.episodes || 24;
@@ -98,11 +121,61 @@ const App: React.FC = () => {
         title: `Episode ${i + 1}`,
         aired: new Date().toISOString()
       }));
+      
+      const ranges = [];
+      for (let i = 0; i < mockCount; i += BATCH_SIZE) {
+        ranges.push({ start: i + 1, end: Math.min(i + BATCH_SIZE, mockCount) });
+      }
+      setEpisodeRanges(ranges);
+      setActiveRangeIndex(0);
+      
       setAllEpisodes(mocks);
       setDisplayedEpisodes(mocks.slice(0, BATCH_SIZE));
       return mocks;
     }
   };
+
+  const handleRangeChange = async (index: number) => {
+    setActiveRangeIndex(index);
+    const range = episodeRanges[index];
+    if (!range) return;
+
+    // Check if we have these episodes in allEpisodes
+    const hasEpisodes = allEpisodes.some(ep => ep.number >= range.start && ep.number <= range.end);
+    
+    if (!hasEpisodes && selectedAnime) {
+      setIsAppending(true);
+      try {
+        // Fetch the specific page from Jikan
+        const page = Math.floor((range.start - 1) / 100) + 1;
+        const resp = await getAnimeEpisodes(selectedAnime.mal_id, page);
+        setAllEpisodes(prev => {
+          const combined = [...prev, ...resp.data];
+          // Remove duplicates
+          return Array.from(new Map(combined.map(item => [item.number, item])).values());
+        });
+      } catch (e) {
+        console.error("Failed to fetch more episodes:", e);
+      } finally {
+        setIsAppending(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (episodeRanges.length > 0 && allEpisodes.length > 0) {
+      const range = episodeRanges[activeRangeIndex];
+      if (range) {
+        const filtered = allEpisodes
+          .filter(ep => ep.number >= range.start && ep.number <= range.end)
+          .sort((a, b) => a.number - b.number);
+        
+        // If we don't have episodes for this range yet, but we are not loading, 
+        // it means they might be missing from the API or still fetching
+        setDisplayedEpisodes(filtered);
+      }
+    }
+  }, [activeRangeIndex, episodeRanges, allEpisodes]);
 
   const handleSelectAnime = async (anime: Anime) => {
     setSelectedAnime(anime);
@@ -130,17 +203,6 @@ const App: React.FC = () => {
       navigate(targetPath);
     }
   }, [selectedAnime, navigate, location.pathname]);
-
-  const loadMoreEpisodes = () => {
-    setIsAppending(true);
-    setTimeout(() => {
-      const nextPage = batchPage + 1;
-      const end = nextPage * BATCH_SIZE;
-      setDisplayedEpisodes(allEpisodes.slice(0, end));
-      setBatchPage(nextPage);
-      setIsAppending(false);
-    }, 400);
-  };
 
   useEffect(() => {
     const syncFromUrl = async () => {
@@ -319,7 +381,11 @@ const App: React.FC = () => {
                     episode={selectedEpisode.number}
                     poster={selectedAnime.images.jpg.large_image_url}
                     onComplete={() => {
-                      if (token && selectedEpisode) updateAniListProgress(token, selectedAnime.mal_id, selectedEpisode.number);
+                      if (token && selectedEpisode) {
+                        updateAniListProgress(token, selectedAnime.mal_id, selectedEpisode.number)
+                          .then(() => setSyncToast({ show: true, message: `Synced Episode ${selectedEpisode.number} to AniList` }))
+                          .catch(() => setSyncToast({ show: true, message: 'AniList Sync Failed' }));
+                      }
                     }}
                   />
                   
@@ -355,27 +421,48 @@ const App: React.FC = () => {
                         <p className="text-slate-400 leading-relaxed text-sm font-medium line-clamp-4">{selectedAnime.synopsis}</p>
                      </div>
                      
-                     <div className="space-y-6 pt-6 border-t border-white/5">
-                       <h3 className="text-xs font-black uppercase tracking-[0.4em] text-slate-500">Episode Selection</h3>
-                       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 max-h-[450px] overflow-y-auto pr-2 custom-scrollbar">
-                         {displayedEpisodes.map((ep, index) => (
-                           <button
-                             key={`${ep.mal_id}-${index}`}
-                             onClick={() => handleSelectEpisode(ep)}
-                             className="bg-slate-900/40 hover:bg-blue-600/10 border border-white/5 hover:border-blue-500/30 p-4 rounded-xl text-left transition-all group"
-                           >
-                             <div className="text-[8px] font-black text-slate-600 group-hover:text-blue-400 uppercase mb-1">Entry {ep.number}</div>
-                             <div className="text-[10px] font-bold truncate text-slate-400 group-hover:text-white">Episode {ep.number}</div>
-                           </button>
-                         ))}
-                       </div>
-                       
-                       {displayedEpisodes.length < allEpisodes.length && (
-                         <button onClick={loadMoreEpisodes} className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                           {isAppending ? 'Syncing...' : 'Load More Episodes'}
-                         </button>
-                       )}
-                     </div>
+                      <div className="space-y-6 pt-6 border-t border-white/5">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-xs font-black uppercase tracking-[0.4em] text-slate-500">Episode Selection</h3>
+                          {episodeRanges.length > 1 && (
+                            <div className="flex gap-2">
+                              {episodeRanges.map((range, idx) => (
+                                <button
+                                  key={idx}
+                                  onClick={() => handleRangeChange(idx)}
+                                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all border ${
+                                    activeRangeIndex === idx 
+                                      ? 'bg-blue-600 border-blue-500 text-white' 
+                                      : 'bg-slate-900/40 border-white/5 text-slate-500 hover:text-slate-300'
+                                  }`}
+                                >
+                                  {range.start}-{range.end}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        
+                        {isAppending ? (
+                          <div className="flex flex-col items-center justify-center py-10 space-y-4">
+                            <div className="w-8 h-8 border-2 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
+                            <p className="text-slate-600 font-black uppercase tracking-widest text-[8px]">Syncing Matrix Data</p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 max-h-[450px] overflow-y-auto pr-2 custom-scrollbar">
+                            {displayedEpisodes.map((ep, index) => (
+                              <button
+                                key={`${ep.mal_id}-${index}`}
+                                onClick={() => handleSelectEpisode(ep)}
+                                className="bg-slate-900/40 hover:bg-blue-600/10 border border-white/5 hover:border-blue-500/30 p-4 rounded-xl text-left transition-all group"
+                              >
+                                <div className="text-[8px] font-black text-slate-600 group-hover:text-blue-400 uppercase mb-1">Entry {ep.number}</div>
+                                <div className="text-[10px] font-bold truncate text-slate-400 group-hover:text-white">Episode {ep.number}</div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                    </div>
                 </div>
               )}
@@ -383,7 +470,20 @@ const App: React.FC = () => {
 
             {selectedEpisode && (
               <div className="w-full lg:w-96 space-y-6 sticky top-28 self-start animate-in fade-in slide-in-from-right-4">
-                <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-slate-500 px-2">Sequential Queue</h3>
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-slate-500">Sequential Queue</h3>
+                  {episodeRanges.length > 1 && (
+                    <select 
+                      value={activeRangeIndex}
+                      onChange={(e) => handleRangeChange(parseInt(e.target.value))}
+                      className="bg-slate-900 border border-white/10 rounded-md px-2 py-1 text-[9px] font-black text-slate-400 uppercase outline-none"
+                    >
+                      {episodeRanges.map((range, idx) => (
+                        <option key={idx} value={idx}>{range.start}-{range.end}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
                 <div className="max-h-[70vh] overflow-y-auto pr-4 space-y-3 custom-scrollbar">
                   {displayedEpisodes.map((ep, index) => (
                     <button
@@ -442,6 +542,15 @@ const App: React.FC = () => {
           <p className="text-[9px] font-black uppercase tracking-[0.6em]">Zenith Streaming Matrix &bull; Security Protocol Active</p>
         </div>
       </footer>
+
+      {syncToast?.show && (
+        <div className="fixed bottom-10 right-10 z-[100] animate-in slide-in-from-bottom-10 fade-in duration-500">
+          <div className="bg-blue-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/20 backdrop-blur-xl">
+            <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+            <span className="text-xs font-black uppercase tracking-widest">{syncToast.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -8,8 +8,8 @@ export const resolveSource = async (
   episodeNumber: number,
   animeContext?: Anime
 ): Promise<SourceResult[]> => {
-  // Use Zenith API for Kuudere and AllManga providers
-  if (plugin.provider === 'Kuudere' || plugin.provider === 'AllManga') {
+  // Use Zenith API for Kuudere, AllManga and Anizone providers
+  if (plugin.provider === 'Kuudere' || plugin.provider === 'AllManga' || plugin.provider === 'Anizone') {
     const sources = await getZenithSources(malId, episodeNumber, plugin.category, plugin.provider, animeContext);
     if (sources.length > 0) return sources;
   }

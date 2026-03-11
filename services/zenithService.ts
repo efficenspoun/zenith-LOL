@@ -11,7 +11,7 @@ export const getZenithSources = async (
 ): Promise<SourceResult[]> => {
   try {
     const query = (animeContext?.title_english || animeContext?.title || 'Anime').trim();
-    const sourceParam = provider.toLowerCase() === 'kuudere' ? 'kuudere' : 'allmanga';
+    const sourceParam = provider.toLowerCase();
     const typeParam = category === 'dub' ? 'dub' : 'sub';
 
     const url = `${ZENITH_API_BASE}/anime?query=${encodeURIComponent(query)}&episode=${episodeNumber}&source=${sourceParam}&type=${typeParam}`;
@@ -130,11 +130,23 @@ export const getZenithSources = async (
       // Handle ALLMANGA "Default" source where url is an object
       if (typeof streamUrl === 'object' && streamUrl !== null) {
         if (streamUrl.sources && Array.isArray(streamUrl.sources)) {
-          streamUrl = streamUrl.sources[0]?.url || '';
+          const preferred = streamUrl.sources.find((src: any) => src.quality === '1080p') || 
+                          streamUrl.sources.find((src: any) => src.quality === '720p') || 
+                          streamUrl.sources[0];
+          streamUrl = preferred?.url || '';
           isEmbed = false;
         } else if (streamUrl.url) {
           streamUrl = streamUrl.url;
         }
+      }
+      
+      if (typeof streamUrl !== 'string') {
+        streamUrl = String(streamUrl || '');
+      }
+      
+      // Re-evaluate isEmbed for AllManga direct links
+      if (provider === 'allmanga' && (streamUrl.includes('.m3u8') || streamUrl.includes('.mp4'))) {
+        isEmbed = false;
       }
 
       return {
